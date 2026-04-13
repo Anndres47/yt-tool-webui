@@ -375,9 +375,9 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
-        
-        # Note: ytarchive does not currently support a --visitor-data flag.
-        # It relies on the token alone or cookies for session identification.
+        if visitor_id:
+            # ytarchive dev branch uses --visitor for visitorData
+            cmd += ["--visitor", visitor_id]
         
         # Append advanced arguments
         if cfg.get("ytarchive_args"):
