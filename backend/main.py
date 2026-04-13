@@ -49,7 +49,21 @@ async def get_auto_potoken() -> tuple[str, str]:
     return await asyncio.to_thread(fetch)
 
 
+# Startup Check for PO Token Provider
+async def check_pot_connectivity():
+    print("[System] Checking connectivity to PO Token provider...", flush=True)
+    token, _ = await get_auto_potoken()
+    if token:
+        print("\033[92m[System] PO Token Provider is REACHABLE and functional.\033[0m", flush=True)
+    else:
+        print("\033[93m[System] WARNING: PO Token Provider is unreachable or slow. Auto-token may fail on first try.\033[0m", flush=True)
+
+
 app = FastAPI()
+
+@app.on_event("startup")
+async def on_startup():
+    asyncio.create_task(check_pot_connectivity())
 
 app.add_middleware(
     CORSMiddleware,
@@ -311,10 +325,10 @@ async def api_download(
 
     job_id = str(uuid.uuid4())
 
-    # Auto-fetch PO Token if not manually set
+    # Auto-fetch PO Token if not manually set (or if current token looks invalid/short)
     visitor_id = ""
     potoken = potoken.strip()
-    if not potoken:
+    if len(potoken) < 20: # Real tokens are very long strings
         print(f"[job:{job_id[:8]}] Auto-fetching PO Token...", flush=True)
         potoken, visitor_id = await get_auto_potoken()
         if potoken:
