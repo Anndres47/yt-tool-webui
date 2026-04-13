@@ -19,13 +19,15 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
   - **Full Re-encode (Slow)** — optional transcoding to H.264/AAC for maximum compatibility across all devices.
   - **Configurable Defaults** — set your preferred video (MP4, MKV, etc.) and audio (MP3, M4A, FLAC, etc.) formats in the Settings tab.
   - **Smart Codec Selection** — the cutter automatically selects the best encoder if the source format differs from your configured default.
+  - **Optional Audio Re-encode** — a toggle in Advanced Settings allows forcing AAC audio re-encoding during Instant Cuts to ensure maximum player compatibility (fixes Windows Media Player silence) without slowing down the video slicing.
   - **Library picker** — select files from `outputs/` or `outputs/ffmpeg/`, streamed via HTTP range requests.
   - **Native video preview** — seek and set cut points from the playhead.
 - **Surgical Cleanup** — each download runs in a unique temp directory; cancelling a video download wipes only that specific job's leftovers.
 - **Filename Sanitization** — output names are automatically cleaned; spaces are replaced with underscores (`_`) for better filesystem compatibility.
 - **Settings panel** — configure Data, Download (temp), and Output paths directly from the UI.
 - **Advanced Settings** — pass custom CLI arguments to `yt-dlp`, `ytarchive`, and `ffmpeg` for specialized workflows.
-- **PO Token Validation** — built-in check for livestreams to prevent "Video details not found" errors with a direct link to the setup guide.
+- **Automated PO Tokens** — an integrated Rust-based `pot-provider` sidecar container automatically generates Proof-of-Origin tokens for every download, bypassing bot blocks with zero configuration.
+- **Forward Progress Watchdog** — the backend monitors all downloads; if a process stalls for 60 seconds (potentially due to a 403 bot block), it is automatically killed and cleaned up.
 - **Cancel Cut** — instantly stop slow re-encodes with automatic cleanup of unfinished files.
 - **Persistent UI State** — navigate between tabs without losing progress or input data thanks to Vue's `KeepAlive`.
 - **Command log** — every CLI command executed is timestamped and logged to `data/logs/commands.log`. Progress is prefixed with the job ID in `docker logs` for easy debugging.
@@ -141,6 +143,7 @@ All settings are available in the **Settings** tab of the UI.
 | FFmpeg args | _(empty)_ | Additional CLI arguments for FFmpeg cut/re-encode. |
 | Video format | `mp4` | Default output extension for video cuts (MP4, MKV, MOV, WebM). |
 | Audio format | `mp3` | Default output extension for audio cuts (MP3, M4A, WAV, FLAC, Opus). |
+| Re-encode Audio Instant | `false` | If true, forces AAC audio re-encoding during Instant Cuts for better compatibility. |
 
 ### Using cookies
 

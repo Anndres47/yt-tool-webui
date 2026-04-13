@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "ffmpeg_args": "",
     "video_format": "mp4",
     "audio_format": "mp3",
+    "reencode_audio_instant": False,
 }
 
 

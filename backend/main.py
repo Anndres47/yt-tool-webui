@@ -5,6 +5,7 @@ import re
 import shlex
 import shutil
 import signal
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -19,7 +20,36 @@ from config import get_config, save_config
 from logger import log_command
 from jobs import JobManager
 
+# Helper to fetch PO Token from local sidecar
+async def get_auto_potoken() -> str:
+    def fetch():
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                # Use a longer timeout (30s) as token generation can be slow
+                req = urllib.request.Request(
+                    "http://pot-provider:4416/get_pot", 
+                    data=b"{}", 
+                    headers={'Content-Type': 'application/json'}
+                )
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_data = json.loads(response.read())
+                    token = res_data.get("po_token", "")
+                    if token:
+                        return token
+            except Exception as e:
+                if attempt < max_attempts - 1:
+                    print(f"\033[93m[PO Token] Attempt {attempt + 1} failed, retrying... ({e})\033[0m", flush=True)
+                    import time
+                    time.sleep(2)
+                else:
+                    print(f"\033[91m[PO Token] ERROR: All fetch attempts failed: {e}\033[0m", flush=True)
+        return ""
+    return await asyncio.to_thread(fetch)
+
+
 app = FastAPI()
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -278,6 +308,13 @@ async def api_download(
     Path(dl_path).mkdir(parents=True, exist_ok=True)
     Path(out_path).mkdir(parents=True, exist_ok=True)
 
+    job_id = str(uuid.uuid4())
+
+    # Auto-fetch PO Token if not manually set
+    if not potoken:
+        print(f"[job:{job_id[:8]}] Auto-fetching PO Token...", flush=True)
+        potoken = await get_auto_potoken()
+
     # Concurrency Limit Check (Max 5 active download jobs)
     active_downloads = [
         j for j in job_manager.get_all_jobs().values()
@@ -289,7 +326,6 @@ async def api_download(
             detail="Maximum concurrent downloads (5) reached. Please wait or cancel a download."
         )
 
-    job_id = str(uuid.uuid4())
     # Create a unique temp folder for this specific job to isolate its files
     job_temp_dir = Path(dl_path) / f"job_{job_id[:8]}"
     job_temp_dir.mkdir(parents=True, exist_ok=True)
@@ -378,7 +414,17 @@ async def api_download_progress(job_id: str):
 
         try:
             while True:
-                line_bytes = await process.stdout.readline()
+                try:
+                    # Watchdog: If no output for 60s, assume it's stalled/blocked
+                    line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 60s. Terminating.\033[0m", flush=True)
+                    process.terminate()
+                    # Mark for cleanup
+                    job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True})
+                    yield f"data: {json.dumps({'error': 'Download stalled for 60s (Possible YouTube Bot Block). Job terminated.'})}\n\n"
+                    return
+
                 if not line_bytes:
                     break
                 line = line_bytes.decode("utf-8", errors="replace").strip()
@@ -630,7 +676,10 @@ async def api_ffmpeg_cut(
         else:
             # Instant cut
             video_codec = ["-c:v", "copy"]
-            audio_codec = ["-c:a", "copy"]
+            if cfg.get("reencode_audio_instant"):
+                audio_codec = ["-c:a", "aac", "-b:a", "192k"]
+            else:
+                audio_codec = ["-c:a", "copy"]
 
     # With -ss before -i, -to is relative to the seek point (output duration).
     try:

@@ -15,3 +15,8 @@ services:
       - YTDL_DOWNLOAD_PATH=/app/downloads
       - YTDL_OUTPUT_PATH=/app/outputs
     restart: unless-stopped
+
+  pot-provider:
+    image: ghcr.io/brainicism/bgutil-ytdlp-pot-provider-rs:latest
+    container_name: pot-provider
+    restart: unless-stopped

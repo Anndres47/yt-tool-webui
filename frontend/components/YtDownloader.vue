@@ -68,20 +68,11 @@
         <div>Maximum concurrent downloads (5) reached. Please wait or cancel an active download to start a new one.</div>
       </div>
 
-      <div v-if="mode === 'livestream' && !poTokenConfigured" class="msg msg-error" style="margin-bottom:16px">
-        <div style="margin-bottom:4px"><strong>PO Token Required</strong></div>
-        <div>
-          Livestream downloads require a PO Token to avoid "Video details not found" errors. 
-          <a href="https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide#guide-providing-a-po-token-manually-for-use-with-mweb-client" target="_blank" style="color:inherit;text-decoration:underline">Follow this guide</a> 
-          to get one, then add it in the <strong>Settings</strong> tab.
-        </div>
-      </div>
-
       <div class="btn-row">
         <button 
           class="btn btn-primary" 
           @click="startDownload" 
-          :disabled="submitting || !url.trim() || activeTasks.length >= 5 || (mode === 'livestream' && !poTokenConfigured)"
+          :disabled="submitting || !url.trim() || activeTasks.length >= 5"
         >
           <svg v-if="!submitting" width="13" height="13" viewBox="0 0 13 13" fill="none">
             <path d="M6.5 1v7.5M3 6l3.5 3.5L10 6M1 11.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -189,16 +180,12 @@ const url = ref('')
 const mode = ref('video')
 const quality = ref('best')
 const reencodeAudio = ref(false)
-const poTokenConfigured = ref(false)
 
 const submitting = ref(false)
 const activeTasks = ref([])
 
 onMounted(async () => {
   try {
-    const res = await axios.get('/api/settings')
-    poTokenConfigured.value = !!res.data.potoken
-    
     // Load existing running jobs
     const jobsRes = await axios.get('/api/jobs')
     const jobs = jobsRes.data
