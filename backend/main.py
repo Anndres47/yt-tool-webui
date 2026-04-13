@@ -313,11 +313,17 @@ async def api_download(
 
     # Auto-fetch PO Token if not manually set
     visitor_id = ""
+    potoken = potoken.strip()
     if not potoken:
         print(f"[job:{job_id[:8]}] Auto-fetching PO Token...", flush=True)
         potoken, visitor_id = await get_auto_potoken()
         if potoken:
             print(f"[job:{job_id[:8]}] PO Token fetched (ID: {visitor_id[:10]}...)", flush=True)
+        else:
+            print(f"\033[93m[job:{job_id[:8]}] WARNING: Auto-fetch returned NO token. YouTube may block this request.\033[0m", flush=True)
+    
+    potoken = potoken.strip()
+    visitor_id = visitor_id.strip()
 
     # Concurrency Limit Check (Max 5 active download jobs)
     active_downloads = [
@@ -350,8 +356,9 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
-        if visitor_id:
-            cmd += ["--visitor-data", visitor_id]
+        
+        # Note: ytarchive does not currently support a --visitor-data flag.
+        # It relies on the token alone or cookies for session identification.
         
         # Append advanced arguments
         if cfg.get("ytarchive_args"):
