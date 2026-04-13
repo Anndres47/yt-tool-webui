@@ -297,10 +297,12 @@ function listenToJob(task) {
     if (data.error) {
       task.msg = { type: 'error', text: data.error }
       cleanupTask(task)
-      // Auto-hide error after 5 seconds
-      setTimeout(() => {
-        removeTask(task.id)
-      }, 5000)
+      // Only auto-hide if it's a fatal termination error
+      if (!data.retry) {
+        setTimeout(() => {
+          removeTask(task.id)
+        }, 5000)
+      }
       return
     }
     if (data.done) {
@@ -328,12 +330,10 @@ function listenToJob(task) {
 
   es.onerror = () => {
     if (!task.done && !task.msg) {
-      task.msg = { type: 'error', text: 'Connection lost.' }
+      task.msg = { type: 'error', text: 'Connection lost. Refresh to reconnect.' }
       cleanupTask(task)
-      // Auto-hide after 5 seconds
-      setTimeout(() => {
-        removeTask(task.id)
-      }, 5000)
+      // WE NO LONGER removeTask here. This prevents the card from disappearing
+      // while the background process is actually still running.
     }
   }
 }

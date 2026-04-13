@@ -1066,6 +1066,7 @@ if __name__ == "__main__":
     # Identify and recover interrupted livestreams
     to_recover = job_manager.cleanup_on_startup()
     if to_recover:
-        asyncio.run(auto_recover_livestreams(to_recover))
+        # Run recovery in the background to avoid blocking the Uvicorn server start
+        asyncio.create_task(auto_recover_livestreams(to_recover))
     
     uvicorn.run(app, host="0.0.0.0", port=8047)
