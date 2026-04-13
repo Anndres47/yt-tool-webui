@@ -350,6 +350,8 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
+        if visitor_id:
+            cmd += ["--visitor-data", visitor_id]
         
         # Append advanced arguments
         if cfg.get("ytarchive_args"):

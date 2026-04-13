@@ -28,7 +28,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <span class="version-tag">v1.0</span>
+        <span class="version-tag">v1.7.0-beta</span>
       </div>
     </aside>
 
