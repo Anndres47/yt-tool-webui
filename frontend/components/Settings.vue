@@ -189,6 +189,12 @@ async function save() {
   try {
     await axios.post('/api/settings', cfg.value)
     msg.value = { type: 'success', text: 'Settings saved.' }
+    // Auto-hide success message after 5 seconds
+    setTimeout(() => {
+      if (msg.value?.type === 'success') {
+        msg.value = null
+      }
+    }, 5000)
   } catch (err) {
     msg.value = { type: 'error', text: err.response?.data?.detail ?? err.message }
   } finally {
