@@ -111,15 +111,16 @@
     <div class="panel">
       <div class="panel-label">Maintenance</div>
       <div class="btn-row">
-        <button class="btn btn-danger" @click="clearJobs" :disabled="clearing">
+        <button class="btn btn-ghost" @click="clearJobs" :disabled="clearing">
           <svg v-if="!clearing" width="13" height="13" viewBox="0 0 13 13" fill="none">
              <path d="M1 3h11M4 3V2a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1M2 3l1 8a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1l1-8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           <span v-if="clearing" class="spinner"></span>
-          {{ clearing ? 'Clearing…' : 'Clear Completed Jobs' }}
+          Clear completed jobs
         </button>
       </div>
     </div>
+
 
     <div class="panel">
       <div class="btn-row">
