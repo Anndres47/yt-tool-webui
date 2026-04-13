@@ -5,6 +5,11 @@ RUN npm install
 COPY frontend .
 RUN npm run build
 
+# Build dreammu/ytarchive fork to support --visitor-data
+FROM golang:alpine AS ytarchive-builder
+RUN apk add --no-cache git
+RUN go install github.com/dreammu/ytarchive@dev
+
 FROM python:3.11-slim AS backend
 WORKDIR /app
 
@@ -12,21 +17,11 @@ WORKDIR /app
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/
 COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/
 
-# Install only essential tools for ytarchive
-RUN apt-get update && apt-get install -y \
-    curl \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
+# Copy compiled ytarchive from fork
+COPY --from=ytarchive-builder /go/bin/ytarchive /usr/local/bin/ytarchive
 
 # Install yt-dlp
 RUN pip install --no-cache-dir yt-dlp
-
-# Install ytarchive (Stable release)
-RUN curl -L https://github.com/Kethsar/ytarchive/releases/latest/download/ytarchive_linux_amd64.zip \
-       -o /tmp/ytarchive.zip \
-    && unzip /tmp/ytarchive.zip -d /usr/local/bin \
-    && chmod +x /usr/local/bin/ytarchive \
-    && rm /tmp/ytarchive.zip
 
 COPY --from=frontend /app/dist ./frontend
 COPY backend ./backend

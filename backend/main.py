@@ -389,9 +389,9 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
-        
-        # Note: ytarchive does not support --visitor/--visitor-data flags yet.
-        # It relies on the token alone or cookies for session identification.
+        if visitor_id:
+            # We are now using the dreammu/ytarchive fork which supports --visitor-data
+            cmd += ["--visitor-data", visitor_id]
         
         # Append advanced arguments
         if cfg.get("ytarchive_args"):
