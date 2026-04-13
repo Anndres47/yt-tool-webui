@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import signal
 import uuid
 from pathlib import Path
@@ -277,18 +278,30 @@ async def api_download(
     Path(out_path).mkdir(parents=True, exist_ok=True)
 
     job_id = str(uuid.uuid4())
+    # Create a unique temp folder for this specific job to isolate its files
+    job_temp_dir = Path(dl_path) / f"job_{job_id[:8]}"
+    job_temp_dir.mkdir(parents=True, exist_ok=True)
 
     if mode == "livestream":
-        # -td is temporary dir, -o is final output
-        cmd = ["ytarchive", "-td", dl_path, url, "best", "-o", f"{out_path}/{{id}}"]
+        # Map UI quality to ytarchive labels
+        ytarchive_quality = quality
+        if quality == "best":
+            ytarchive_quality = "best"
+        elif quality.endswith("p"):
+            # ytarchive expects just "1080p", "720p", etc.
+            pass
+        
+        # Added --newline for logs and --merge to handle 'Keep & Mux' unattended
+        # Using the unique job_temp_dir for segments
+        cmd = ["ytarchive", "--newline", "--merge", "-td", str(job_temp_dir), url, ytarchive_quality, "-o", f"{out_path}/{{id}}"]
         if cookies:
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
     elif mode == "audio":
         # --paths temp: is working dir, --paths home: is final dir
-        cmd = ["yt-dlp", url, "-f", "bestaudio",
-               "--paths", f"temp:{dl_path}", "--paths", f"home:{out_path}",
+        cmd = ["yt-dlp", "--newline", url, "-f", "bestaudio",
+               "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{out_path}",
                "-o", "%(title)s.%(ext)s"]
         if reencode_audio == "true":
             cmd += ["-x", "--audio-format", "mp3",
@@ -299,8 +312,8 @@ async def api_download(
             cmd += ["--extractor-args", f"youtube:player_client=web;po_token=web+{potoken}"]
     else:  # video
         fmt = QUALITY_MAP.get(quality, QUALITY_MAP["best"])
-        cmd = ["yt-dlp", url, "-f", fmt,
-               "--paths", f"temp:{dl_path}", "--paths", f"home:{out_path}",
+        cmd = ["yt-dlp", "--newline", url, "-f", fmt,
+               "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{out_path}",
                "-o", "%(title)s.%(ext)s"]
         if cookies:
             cmd += ["--cookies", cookies]
@@ -314,7 +327,11 @@ async def api_download(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    job_manager.add_job(job_id, {"mode": mode, "type": "download"}, process=process)
+    job_manager.add_job(job_id, {
+        "mode": mode, 
+        "type": "download", 
+        "temp_dir": str(job_temp_dir)
+    }, process=process)
     return {"job_id": job_id}
 
 
@@ -348,33 +365,39 @@ async def api_download_progress(job_id: str):
 
                 if mode == "livestream":
                     # ytarchive progress: "Video Segments: 123 (4.5MB)  /  128"
-                    seg_match = re.search(r"Video Segments:\s*(\d+)", line)
+                    # Handle "Video Segments: 123" or "Audio Segments: 123"
+                    seg_match = re.search(r"(?:Video|Audio) Segments:\s*(\d+)", line, re.IGNORECASE)
                     if seg_match:
                         segments = int(seg_match.group(1))
                         # Check if live: ytarchive prints "at the live edge" or similar
-                        is_live = "live" in line.lower() or "up to date" in line.lower()
-                        if is_live:
-                            event = json.dumps({"live": True, "segments": segments})
-                        else:
-                            event = json.dumps({"segments": segments})
+                        is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
+                        event = json.dumps({
+                            "live": is_live, 
+                            "segments": segments,
+                            "mode": "livestream"
+                        })
                 else:
                     # yt-dlp: [download]  42.3% of 1.23GiB at  3.21MiB/s ETA 00:12
+                    # The regex handles optional ~ and extra spaces
                     dl_match = re.search(
-                        r"\[download\]\s+([\d.]+)%\s+of\s+[\d.]+\S+\s+at\s+([\d.]+\S+)\s+ETA\s+(\S+)",
+                        r"\[download\]\s+([\d.]+)%\s+of\s+[\d.]+\S+\s+at\s+([~\d.]+\S+)\s+ETA\s+([~\d:]+)",
                         line,
                     )
                     if dl_match:
                         event = json.dumps({
                             "percent": float(dl_match.group(1)),
-                            "speed": dl_match.group(2),
-                            "eta": dl_match.group(3),
+                            "speed": dl_match.group(2).replace("~", ""),
+                            "eta": dl_match.group(3).replace("~", ""),
                         })
 
                 if event:
                     yield f"data: {event}\n\n"
 
             rc = await process.wait()
-            if rc == 0 or rc == -2:  # -2 = SIGINT (ytarchive abort-and-save)
+            # rc == 0: success
+            # rc == -2: SIGINT (handled by python)
+            # rc == 2 or 130: SIGINT (handled by ytarchive/shell)
+            if rc in [0, -2, 2, 130]:
                 yield f"data: {json.dumps({'done': True})}\n\n"
             else:
                 err_msg = f"Process exited with code {rc}"
@@ -385,12 +408,21 @@ async def api_download_progress(job_id: str):
         finally:
             # Check if it was already cancelled before setting to done
             current_job = job_manager.get_job(job_id)
-            if current_job and current_job.get("cleanup_ts") and mode == "livestream":
-                # Delete all .ts segments in dl_path (best effort)
-                dl_path = get_config()["download_path"]
-                for ts in Path(dl_path).glob("*.ts"):
+            temp_dir = current_job.get("temp_dir") if current_job else None
+            
+            # If we have a dedicated temp dir, clean it up
+            if temp_dir and os.path.exists(temp_dir):
+                # If specifically requested to delete (Abort/Cancel)
+                if current_job.get("cleanup_files"):
                     try:
-                        os.unlink(ts)
+                        shutil.rmtree(temp_dir)
+                    except:
+                        pass
+                # On success, still remove the empty or leftover folder
+                else:
+                    try:
+                        # Clean up if successful (files have been moved to outputs)
+                        shutil.rmtree(temp_dir)
                     except:
                         pass
 
@@ -419,15 +451,18 @@ async def api_download_cancel(job_id: str, delete: str = Form("false")):
         if mode == "livestream":
             if is_delete:
                 # Mark for cleanup if they chose to delete
-                job_manager.update_job(job_id, {"status": "cancelled", "cleanup_ts": True})
+                job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True})
                 process.terminate()
             else:
                 # SIGINT tells ytarchive to mux and save up to current point
                 process.send_signal(signal.SIGINT)
                 job_manager.update_job(job_id, {"status": "finishing"})
         else:
-            process.terminate()  # SIGTERM — yt-dlp cleans up .part files
-            job_manager.update_job(job_id, {"status": "cancelled"})
+            if is_delete:
+                job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True})
+            else:
+                job_manager.update_job(job_id, {"status": "cancelled"})
+            process.terminate()  # SIGTERM — yt-dlp usually cleans up, but we'll double check
     except ProcessLookupError:
         pass
     return {"status": "signal_sent"}
@@ -442,7 +477,7 @@ async def api_ffmpeg_cut(
     start: str = Form(...),
     end: str = Form(...),
     name: str = Form(...),
-    reencode_audio: str = Form("false"),
+    reencode_full: str = Form("false"),
     library_path: str = Form(""),
     duration_s: str = Form("0"),
     video: Optional[UploadFile] = None,
@@ -513,7 +548,15 @@ async def api_ffmpeg_cut(
     output_file = f"{cut_dir}/{safe_output_name}.mp4"
     job_id = str(uuid.uuid4())
 
-    audio_codec = ["libmp3lame", "-b:a", "320k"] if reencode_audio == "true" else ["copy"]
+    if reencode_full == "true":
+        # Full re-encode: libx264 for video, aac for audio
+        # Using -preset superfast to keep it as quick as possible
+        video_codec = ["libx264", "-crf", "23", "-preset", "superfast"]
+        audio_codec = ["aac", "-b:a", "192k"]
+    else:
+        # Instant cut: just copy the streams
+        video_codec = ["copy"]
+        audio_codec = ["copy"]
 
     # With -ss before -i, -to is relative to the seek point (output duration).
     # Compute duration = end - start on the backend.
@@ -527,7 +570,7 @@ async def api_ffmpeg_cut(
         "-ss", start,
         "-i", input_path,
         "-t", cut_duration,
-        "-c:v", "copy",
+        "-c:v", *video_codec,
         "-c:a", *audio_codec,
         "-progress", "pipe:1",
         "-nostats",

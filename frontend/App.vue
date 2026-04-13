@@ -7,7 +7,11 @@
     <aside class="sidebar">
       <div class="sidebar-logo">
         <span class="logo-mark">▶</span>
-        <span class="logo-text">YTDL</span>
+        <div class="logo-text">
+          <div>YT</div>
+          <div>TOOL</div>
+          <div class="logo-subtext">WEB-UI</div>
+        </div>
       </div>
 
       <nav class="sidebar-nav">
@@ -62,7 +66,7 @@ const tabs = [
   {
     id: 'settings',
     label: 'Config',
-    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`
+    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5l1.5-1.5M11 5l1.5-1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`
   },
 ]
 </script>
@@ -141,9 +145,9 @@ body {
 
 .sidebar-logo {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 22px 20px;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px 20px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -151,14 +155,25 @@ body {
   color: var(--accent);
   font-size: 14px;
   line-height: 1;
+  margin-top: 2px; /* Slight offset to align with the first line of text */
 }
 
 .logo-text {
   font-family: var(--font-ui);
   font-weight: 800;
-  font-size: 15px;
-  letter-spacing: 0.2em;
+  font-size: 16px;
+  line-height: 1.1;
+  letter-spacing: 0.15em;
   color: var(--text);
+  display: flex;
+  flex-direction: column;
+}
+
+.logo-subtext {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  color: var(--muted);
+  margin-top: 2px;
 }
 
 .sidebar-nav {

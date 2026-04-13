@@ -86,18 +86,27 @@
 
       <!-- Cancel Confirmation -->
       <div v-if="showCancelConfirm" class="msg msg-info" style="margin-top:16px">
-        <div style="margin-bottom:8px"><strong>Cancel download?</strong></div>
-        <div style="margin-bottom:12px;opacity:0.8">
-          {{ mode === 'livestream' 
-            ? 'Do you want to keep the segments downloaded so far and mux them into a video, or delete everything?'
-            : 'Do you want to stop the download and keep partial files, or delete everything?' 
-          }}
-        </div>
-        <div class="btn-row">
-          <button class="btn btn-primary" style="padding:6px 14px" @click="cancel(false)">Keep &amp; Mux</button>
-          <button class="btn btn-danger" style="padding:6px 14px" @click="cancel(true)">Delete All</button>
-          <button class="btn btn-ghost" style="padding:6px 14px" @click="showCancelConfirm = false">Go Back</button>
-        </div>
+        <template v-if="mode === 'livestream'">
+          <div style="margin-bottom:8px"><strong>Abort &amp; Save?</strong></div>
+          <div style="margin-bottom:12px;opacity:0.8">
+            Do you want to keep the segments downloaded so far and mux them into a video, or delete everything?
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" style="padding:6px 14px" @click="cancel(false)">Keep &amp; Mux</button>
+            <button class="btn btn-danger" style="padding:6px 14px" @click="cancel(true)">Delete All</button>
+            <button class="btn btn-ghost" style="padding:6px 14px" @click="showCancelConfirm = false">Go Back</button>
+          </div>
+        </template>
+        <template v-else>
+          <div style="margin-bottom:8px"><strong>Cancel download?</strong></div>
+          <div style="margin-bottom:12px;opacity:0.8">
+            Are you sure you want to stop this download? Partial files will be deleted.
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-danger" style="padding:6px 20px" @click="cancel(true)">Yes, Cancel</button>
+            <button class="btn btn-ghost" style="padding:6px 20px" @click="showCancelConfirm = false">No, Continue</button>
+          </div>
+        </template>
       </div>
 
       <!-- Progress -->
@@ -105,9 +114,10 @@
         <template v-if="running">
           <div class="progress-header">
             <div>
-              <div v-if="isLive" class="live-badge">
+              <div v-if="mode === 'livestream' || isLive" class="live-badge">
                 <div class="live-dot"></div>
-                Live — In progress
+                <span v-if="isLive">Live — {{ segments }} segments captured</span>
+                <span v-else>Catching up — {{ segments }} segments</span>
               </div>
               <div v-else class="progress-pct">{{ percent.toFixed(1) }}<span style="font-size:14px;font-weight:400;color:var(--muted)">%</span></div>
             </div>
@@ -160,6 +170,7 @@ const running = ref(false)
 const percent = ref(0)
 const speed = ref('')
 const eta = ref('')
+const segments = ref(0)
 const isLive = ref(false)
 const progressMsg = ref(null)
 const showCancelConfirm = ref(false)
@@ -203,8 +214,9 @@ const startDownload = async () => {
         finish()
         return
       }
-      if (data.live) {
-        isLive.value = true
+      if (data.mode === 'livestream') {
+        isLive.value = !!data.live
+        segments.value = data.segments || 0
         return
       }
       if (data.percent !== undefined) {

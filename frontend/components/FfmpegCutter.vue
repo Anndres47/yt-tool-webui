@@ -116,20 +116,20 @@
 
       <div class="field">
         <label class="field-label">Output filename <span style="color:var(--muted);font-weight:400">(without extension)</span></label>
-        <input type="text" v-model="outputName" placeholder="my-clip" />
+        <input type="text" v-model="outputName" placeholder="my-clip" :disabled="cutting" />
       </div>
 
       <div class="field">
         <label
-          :class="['toggle-row', { checked: reencodeAudio }]"
-          @click="reencodeAudio = !reencodeAudio"
+          :class="['toggle-row', { checked: reencodeFull }]"
+          @click="reencodeFull = !reencodeFull"
         >
           <div class="toggle-box">
             <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
               <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
-          Re-encode audio to MP3 320kbps
+          Full Re-encode (Slow, for better compatibility)
         </label>
       </div>
 
@@ -184,7 +184,7 @@ const duration = ref(0)
 const startTime = ref(0)
 const endTime = ref(0)
 const outputName = ref('')
-const reencodeAudio = ref(false)
+const reencodeFull = ref(false)
 
 const cutting = ref(false)
 const cutPercent = ref(0)
@@ -230,6 +230,10 @@ function onLibrarySelect() {
   if (previewObjectUrl.value) { URL.revokeObjectURL(previewObjectUrl.value); previewObjectUrl.value = '' }
   // libraryFile is "folder/filename"
   previewSrc.value = `/api/library/stream/${libraryFile.value}`
+  
+  // Set default output name
+  const fname = libraryFile.value.split('/').pop()
+  outputName.value = fname.slice(0, fname.lastIndexOf('.')) + '_clip'
 }
 
 function onFileUpload(event) {
@@ -245,6 +249,9 @@ function onFileUpload(event) {
   if (previewObjectUrl.value) URL.revokeObjectURL(previewObjectUrl.value)
   previewObjectUrl.value = URL.createObjectURL(file)
   previewSrc.value = previewObjectUrl.value
+  
+  // Set default output name
+  outputName.value = file.name.slice(0, file.name.lastIndexOf('.')) + '_clip'
 }
 
 function onMetadata() {
@@ -296,7 +303,7 @@ async function cut() {
     form.append('start', startTime.value.toString())
     form.append('end', endTime.value.toString())
     form.append('name', outputName.value)
-    form.append('reencode_audio', reencodeAudio.value ? 'true' : 'false')
+    form.append('reencode_full', reencodeFull.value ? 'true' : 'false')
     form.append('duration_s', cutDuration.toString())
 
     if (sourceTab.value === 'library') {

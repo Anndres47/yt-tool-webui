@@ -1,8 +1,8 @@
 version: '3'
 services:
-  yt-tool:
+  yt-tool-webui:
     image: yt-tool-webui
-    container_name: yt-tool
+    container_name: yt-tool-webui
     build: .
     ports:
       - "8047:8047"
