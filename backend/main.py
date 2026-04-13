@@ -6,6 +6,7 @@ import shlex
 import shutil
 import signal
 import urllib.request
+from contextlib import asynccontextmanager
 from urllib.parse import unquote
 import uuid
 from pathlib import Path
@@ -85,12 +86,17 @@ async def checkpoint_saver():
         job_manager.save()
 
 
-app = FastAPI()
-
-@app.on_event("startup")
-async def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Launch background tasks
     asyncio.create_task(check_pot_connectivity())
     asyncio.create_task(checkpoint_saver())
+    yield
+    # Shutdown: Optional cleanup logic here
+    job_manager.save()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
