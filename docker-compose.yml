@@ -1,4 +1,3 @@
-version: '3'
 services:
   yt-tool-webui:
     image: yt-tool-webui
@@ -17,6 +16,6 @@ services:
     restart: unless-stopped
 
   pot-provider:
-    image: ghcr.io/brainicism/bgutil-ytdlp-pot-provider-rs:latest
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
     container_name: pot-provider
     restart: unless-stopped

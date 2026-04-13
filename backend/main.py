@@ -20,13 +20,13 @@ from config import get_config, save_config
 from logger import log_command
 from jobs import JobManager
 
-# Helper to fetch PO Token from local sidecar
-async def get_auto_potoken() -> str:
+# Helper to fetch PO Token and Visitor Data from local sidecar
+async def get_auto_potoken() -> tuple[str, str]:
     def fetch():
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                # Use a longer timeout (30s) as token generation can be slow
+                # Use a long timeout (30s) as token generation can be slow
                 req = urllib.request.Request(
                     "http://pot-provider:4416/get_pot", 
                     data=b"{}", 
@@ -35,8 +35,9 @@ async def get_auto_potoken() -> str:
                 with urllib.request.urlopen(req, timeout=30) as response:
                     res_data = json.loads(response.read())
                     token = res_data.get("po_token", "")
+                    visitor_id = res_data.get("visit_identifier", "")
                     if token:
-                        return token
+                        return token, visitor_id
             except Exception as e:
                 if attempt < max_attempts - 1:
                     print(f"\033[93m[PO Token] Attempt {attempt + 1} failed, retrying... ({e})\033[0m", flush=True)
@@ -44,7 +45,7 @@ async def get_auto_potoken() -> str:
                     time.sleep(2)
                 else:
                     print(f"\033[91m[PO Token] ERROR: All fetch attempts failed: {e}\033[0m", flush=True)
-        return ""
+        return "", ""
     return await asyncio.to_thread(fetch)
 
 
@@ -311,9 +312,12 @@ async def api_download(
     job_id = str(uuid.uuid4())
 
     # Auto-fetch PO Token if not manually set
+    visitor_id = ""
     if not potoken:
         print(f"[job:{job_id[:8]}] Auto-fetching PO Token...", flush=True)
-        potoken = await get_auto_potoken()
+        potoken, visitor_id = await get_auto_potoken()
+        if potoken:
+            print(f"[job:{job_id[:8]}] PO Token fetched (ID: {visitor_id[:10]}...)", flush=True)
 
     # Concurrency Limit Check (Max 5 active download jobs)
     active_downloads = [
@@ -361,8 +365,13 @@ async def api_download(
                     "--postprocessor-args", "ffmpeg:-b:a 320k"]
         if cookies:
             cmd += ["--cookies", cookies]
+        
+        # Combine PO Token and Visitor ID for yt-dlp
         if potoken:
-            cmd += ["--extractor-args", f"youtube:player_client=web;po_token=web+{potoken}"]
+            token_arg = f"po_token=web+{potoken}"
+            if visitor_id:
+                token_arg += f";visitor_data={visitor_id}"
+            cmd += ["--extractor-args", f"youtube:player_client=web;{token_arg}"]
         
         # Append advanced arguments
         if cfg.get("ytdlp_args"):
@@ -375,8 +384,13 @@ async def api_download(
                "-o", "%(title)s.%(ext)s"]
         if cookies:
             cmd += ["--cookies", cookies]
+        
+        # Combine PO Token and Visitor ID for yt-dlp
         if potoken:
-            cmd += ["--extractor-args", f"youtube:player_client=web;po_token=web+{potoken}"]
+            token_arg = f"po_token=web+{potoken}"
+            if visitor_id:
+                token_arg += f";visitor_data={visitor_id}"
+            cmd += ["--extractor-args", f"youtube:player_client=web;{token_arg}"]
         
         # Append advanced arguments
         if cfg.get("ytdlp_args"):
@@ -415,14 +429,14 @@ async def api_download_progress(job_id: str):
         try:
             while True:
                 try:
-                    # Watchdog: If no output for 60s, assume it's stalled/blocked
-                    line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=60.0)
+                    # Watchdog: If no output for 120s, assume it's stalled/blocked
+                    line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=120.0)
                 except asyncio.TimeoutError:
-                    print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 60s. Terminating.\033[0m", flush=True)
+                    print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 120s. Terminating.\033[0m", flush=True)
                     process.terminate()
                     # Mark for cleanup
                     job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True})
-                    yield f"data: {json.dumps({'error': 'Download stalled for 60s (Possible YouTube Bot Block). Job terminated.'})}\n\n"
+                    yield f"data: {json.dumps({'error': 'Download stalled for 120s (Possible YouTube Bot Block). Job terminated.'})}\n\n"
                     return
 
                 if not line_bytes:

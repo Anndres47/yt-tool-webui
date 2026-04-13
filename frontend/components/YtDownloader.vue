@@ -96,7 +96,7 @@
           <button 
             v-if="!task.done && !task.showCancelConfirm" 
             class="btn btn-ghost btn-sm" 
-            @click="task.showCancelConfirm = true"
+            @click="promptCancel(task)"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
               <rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
@@ -108,18 +108,18 @@
         <!-- Inline Cancel Confirmation -->
         <div v-if="task.showCancelConfirm" class="msg msg-info task-cancel-dialog">
           <template v-if="task.mode === 'livestream'">
-            <div style="font-size:11px;margin-bottom:8px">Keep segments and mux, or delete all?</div>
-            <div class="btn-row">
+            <div style="font-size:11px;margin-bottom:8px">Keep segments and mux, or delete all? <span style="opacity:0.6">(Auto-dismiss in 10s)</span></div>
+            <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
               <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
               <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
-              <button class="btn btn-ghost btn-xs" @click="task.showCancelConfirm = false">Back</button>
+              <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">Back</button>
             </div>
           </template>
           <template v-else>
-            <div style="font-size:11px;margin-bottom:8px">Cancel download? Partial files will be deleted.</div>
-            <div class="btn-row">
+            <div style="font-size:11px;margin-bottom:8px">Cancel download? <span style="opacity:0.6">(Auto-dismiss in 10s)</span></div>
+            <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
               <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
-              <button class="btn btn-ghost btn-xs" @click="task.showCancelConfirm = false">No</button>
+              <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">No</button>
             </div>
           </template>
         </div>
@@ -209,11 +209,32 @@ function addTaskFromJob(id, job) {
     segments: 0,
     msg: null,
     showCancelConfirm: false,
+    cancelTimer: null, // Timer for auto-dismiss
     eventSource: null,
     done: false
   }
   activeTasks.value.push(task)
   listenToJob(task)
+}
+
+function promptCancel(task) {
+  task.showCancelConfirm = true
+  startCancelTimer(task)
+}
+
+function startCancelTimer(task) {
+  clearCancelTimer(task)
+  task.cancelTimer = setTimeout(() => {
+    task.showCancelConfirm = false
+    task.cancelTimer = null
+  }, 10000) // 10 seconds
+}
+
+function clearCancelTimer(task) {
+  if (task.cancelTimer) {
+    clearTimeout(task.cancelTimer)
+    task.cancelTimer = null
+  }
 }
 
 const startDownload = async () => {
@@ -244,6 +265,7 @@ const startDownload = async () => {
       segments: 0,
       msg: null,
       showCancelConfirm: false,
+      cancelTimer: null,
       eventSource: null,
       done: false
     }
@@ -271,6 +293,10 @@ function listenToJob(task) {
     if (data.error) {
       task.msg = { type: 'error', text: data.error }
       cleanupTask(task)
+      // Auto-hide error after 5 seconds
+      setTimeout(() => {
+        removeTask(task.id)
+      }, 5000)
       return
     }
     if (data.done) {
@@ -278,10 +304,10 @@ function listenToJob(task) {
       task.done = true
       task.msg = { type: 'success', text: 'Download complete!' }
       cleanupTask(task)
-      // Auto-hide after 3 seconds
+      // Auto-hide success after 5 seconds
       setTimeout(() => {
         removeTask(task.id)
-      }, 3000)
+      }, 5000)
       return
     }
     if (data.mode === 'livestream') {
@@ -305,6 +331,7 @@ function listenToJob(task) {
 }
 
 const cancelTask = async (task, deleteTemp = false) => {
+  clearCancelTimer(task)
   task.showCancelConfirm = false
   try { 
     const form = new FormData()
