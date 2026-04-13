@@ -7,13 +7,13 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 ## Features
 
 - **Multi-Download System** — download up to **5 concurrent** videos, livestreams, or audio files simultaneously.
-- **Task Cards** — each download is managed via an independent card showing real-time progress, speed, and ETA.
-- **Auto-Hide** — successful downloads automatically disappear from the list after 3 seconds to keep your UI clean.
+- **Task Cards** — each download is managed via an independent card showing video titles, real-time progress, speed, and ETA.
+- **Auto-Hide** — successful downloads automatically disappear from the list after 5 seconds to keep your UI clean.
 - **Concurrency Protection** — the UI proactively blocks new downloads and shows a disclaimer when the 5-job limit is reached.
 - **Quality selector** for video: Best, 1080p, 720p, 480p, 360p
 - **Audio mode** — download best audio stream, optionally re-encode to MP3 320kbps via ffmpeg
 - **Livestream support** — tracks catch-up progress, shows segment count, and pulses when live; Abort & Save automatically muxes segments using the `--merge` flag.
-- **Real-time progress bars** — SSE progress for downloads and real-time segment tracking for streams.
+- **Real-time progress bars** — highly optimized SSE progress tracking using chunk-based batching for high performance without network spam.
 - **FFmpeg Cutter** — trim any video or audio file.
   - **Instant Cut** — use stream copy (`-c:v copy`) for near-instant results with zero quality loss.
   - **Full Re-encode (Slow)** — optional transcoding to H.264/AAC for maximum compatibility across all devices.

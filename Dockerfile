@@ -15,6 +15,11 @@ RUN go build -o /go/bin/ytarchive .
 FROM python:3.11-slim AS backend
 WORKDIR /app
 
+# Install Node.js (Required for yt-dlp signatures)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy static FFmpeg binaries
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/
 COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/
