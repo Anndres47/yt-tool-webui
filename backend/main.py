@@ -6,6 +6,7 @@ import shlex
 import shutil
 import signal
 import urllib.request
+from urllib.parse import unquote
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -54,12 +55,8 @@ async def get_auto_potoken() -> tuple[str, str]:
                             res_data.get("visitor_id") or ""
                         )
                         
-                        # URL Decode if present (e.g. %3D%3D -> ==)
-                        if v_id_raw:
-                            from urllib.parse import unquote
-                            visitor_id = unquote(v_id_raw)
-                        else:
-                            visitor_id = ""
+                        # URL Decode if present
+                        visitor_id = unquote(v_id_raw) if v_id_raw else ""
                         
                         if token:
                             return token, visitor_id
@@ -392,9 +389,9 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
-        if visitor_id:
-            # ytarchive dev branch uses --visitor for visitorData
-            cmd += ["--visitor", visitor_id]
+        
+        # Note: ytarchive does not support --visitor/--visitor-data flags yet.
+        # It relies on the token alone or cookies for session identification.
         
         # Append advanced arguments
         if cfg.get("ytarchive_args"):
