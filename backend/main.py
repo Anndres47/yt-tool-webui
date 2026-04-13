@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import uuid
@@ -298,6 +299,11 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
+        
+        # Append advanced arguments
+        if cfg.get("ytarchive_args"):
+            cmd.extend(shlex.split(cfg["ytarchive_args"]))
+
     elif mode == "audio":
         # --paths temp: is working dir, --paths home: is final dir
         cmd = ["yt-dlp", "--newline", url, "-f", "bestaudio",
@@ -310,6 +316,11 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--extractor-args", f"youtube:player_client=web;po_token=web+{potoken}"]
+        
+        # Append advanced arguments
+        if cfg.get("ytdlp_args"):
+            cmd.extend(shlex.split(cfg["ytdlp_args"]))
+
     else:  # video
         fmt = QUALITY_MAP.get(quality, QUALITY_MAP["best"])
         cmd = ["yt-dlp", "--newline", url, "-f", fmt,
@@ -319,6 +330,10 @@ async def api_download(
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--extractor-args", f"youtube:player_client=web;po_token=web+{potoken}"]
+        
+        # Append advanced arguments
+        if cfg.get("ytdlp_args"):
+            cmd.extend(shlex.split(cfg["ytdlp_args"]))
 
     log_command(job_id, cmd)
 
@@ -541,25 +556,39 @@ async def api_ffmpeg_cut(
     else:
         raise HTTPException(status_code=400, detail="No file provided")
 
+    # Detect if input is audio
+    input_suffix = Path(input_path).suffix.lower()
+    is_audio_input = input_suffix in [".mp3", ".m4a", ".aac", ".opus", ".ogg", ".flac", ".wav", ".m4b"]
+
     # Sanitize output name to prevent path traversal
     safe_output_name = re.sub(r'[^a-zA-Z0-9_\-]', '', name)
     if not safe_output_name:
         safe_output_name = f"clip_{uuid.uuid4().hex[:8]}"
-    output_file = f"{cut_dir}/{safe_output_name}.mp4"
+    
+    # Hardcoded extensions based on input type
+    output_ext = ".mp3" if is_audio_input else ".mp4"
+    output_file = f"{cut_dir}/{safe_output_name}{output_ext}"
     job_id = str(uuid.uuid4())
 
-    if reencode_full == "true":
-        # Full re-encode: libx264 for video, aac for audio
-        # Using -preset superfast to keep it as quick as possible
-        video_codec = ["libx264", "-crf", "23", "-preset", "superfast"]
-        audio_codec = ["aac", "-b:a", "192k"]
+    if is_audio_input:
+        # Audio Logic: Force MP3 output
+        video_codec = ["-vn"]  # Remove video/cover art streams for clean MP3
+        if reencode_full == "true" or input_suffix != ".mp3":
+            audio_codec = ["libmp3lame", "-b:a", "320k"]
+        else:
+            audio_codec = ["copy"]
     else:
-        # Instant cut: just copy the streams
-        video_codec = ["copy"]
-        audio_codec = ["copy"]
+        # Video Logic: Force MP4 output
+        if reencode_full == "true":
+            # Full re-encode: libx264 for video, aac for audio
+            video_codec = ["-c:v", "libx264", "-crf", "23", "-preset", "superfast"]
+            audio_codec = ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            # Instant cut: just copy the streams
+            video_codec = ["-c:v", "copy"]
+            audio_codec = ["-c:a", "copy"]
 
     # With -ss before -i, -to is relative to the seek point (output duration).
-    # Compute duration = end - start on the backend.
     try:
         cut_duration = str(float(end) - float(start))
     except ValueError:
@@ -570,12 +599,26 @@ async def api_ffmpeg_cut(
         "-ss", start,
         "-i", input_path,
         "-t", cut_duration,
-        "-c:v", *video_codec,
-        "-c:a", *audio_codec,
-        "-progress", "pipe:1",
-        "-nostats",
-        output_file,
     ]
+
+    if is_audio_input:
+        cmd.extend(video_codec)
+        cmd.extend(["-c:a"] + audio_codec)
+    else:
+        cmd.extend(["-map", "0"])
+        cmd.extend(video_codec)
+        cmd.extend(audio_codec)
+        cmd.extend(["-c:s", "copy"])
+        cmd.extend(["-avoid_negative_ts", "make_zero", "-strict", "-2"])
+
+    cmd.extend(["-progress", "pipe:1", "-nostats"])
+
+    # Append advanced arguments
+    if cfg.get("ffmpeg_args"):
+        cmd.extend(shlex.split(cfg["ffmpeg_args"]))
+
+    # Final output file
+    cmd.append(output_file)
 
     log_command(job_id, cmd)
 
@@ -659,6 +702,40 @@ async def api_ffmpeg_progress(job_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/ffmpeg/cancel/{job_id}")
+async def api_ffmpeg_cancel(job_id: str):
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    process = job.get("process")
+    if not process:
+        return {"status": "not_running"}
+    
+    try:
+        process.terminate()
+        job_manager.update_job(job_id, {"status": "cancelled"})
+        
+        # Cleanup unfinished file
+        out_path = job.get("output")
+        if out_path and os.path.exists(out_path):
+            try:
+                os.unlink(out_path)
+            except:
+                pass
+                
+        # Cleanup temp input if any
+        tmp_in = job.get("tmp_input")
+        if tmp_in and os.path.exists(tmp_in):
+            try:
+                os.unlink(tmp_in)
+            except:
+                pass
+                
+    except ProcessLookupError:
+        pass
+    return {"status": "signal_sent"}
 
 
 # ---------------------------------------------------------------------------

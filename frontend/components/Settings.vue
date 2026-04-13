@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="section-header">
-      <h1 class="section-title">Config</h1>
+      <h1 class="section-title">Settings</h1>
       <span class="section-sub">server-side settings</span>
     </div>
 
@@ -9,7 +9,7 @@
       <div class="panel-label">Paths</div>
 
       <div class="field">
-        <label class="field-label">Data path <span style="color:var(--muted);font-weight:400">(configs, jobs, logs)</span></label>
+        <label class="field-label">Data path <span style="color:var(--muted);font-weight:400">(settings, jobs, logs)</span></label>
         <input type="text" v-model="cfg.data_path" placeholder="/app/data" />
       </div>
 
@@ -39,6 +39,40 @@
     </div>
 
     <div class="panel">
+      <div class="panel-label">Advanced</div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" @click="showAdvanced = !showAdvanced">
+          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" style="margin-right:4px">
+            <path d="M2 4l4.5 4.5L11 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" :style="{ transform: showAdvanced ? 'rotate(180deg)' : '', transformOrigin: 'center' }"/>
+          </svg>
+          {{ showAdvanced ? 'Hide Advanced Settings' : 'Show Advanced Settings' }}
+        </button>
+      </div>
+
+      <div v-if="showAdvanced" style="margin-top:16px">
+        <div class="msg msg-error" style="margin-bottom:16px">
+          <div style="margin-bottom:4px"><strong>Warning: Experimental</strong></div>
+          Custom arguments may conflict with the tool's internal flags and break functionality. Use with caution.
+        </div>
+
+        <div class="field">
+          <label class="field-label">yt-dlp additional args</label>
+          <input type="text" v-model="cfg.ytdlp_args" placeholder="e.g. --proxy socks5://127.0.0.1:1080 --geo-bypass" />
+        </div>
+
+        <div class="field">
+          <label class="field-label">ytarchive additional args</label>
+          <input type="text" v-model="cfg.ytarchive_args" placeholder="e.g. --threads 3 --vp9" />
+        </div>
+
+        <div class="field">
+          <label class="field-label">FFmpeg additional args</label>
+          <input type="text" v-model="cfg.ffmpeg_args" placeholder="e.g. -vf scale=1280:720 -b:v 5M" />
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
       <div class="panel-label">Maintenance</div>
       <div class="btn-row">
         <button class="btn btn-danger" @click="clearJobs" :disabled="clearing">
@@ -59,7 +93,7 @@
             <path d="M4 12V8h5v4M4 2v3h4V2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           <span v-if="saving" class="spinner"></span>
-          {{ saving ? 'Saving…' : 'Save Config' }}
+          {{ saving ? 'Saving…' : 'Save Settings' }}
         </button>
       </div>
 
@@ -74,7 +108,17 @@
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
 
-const cfg = ref({ data_path: '', download_path: '', output_path: '', cookies_path: '', potoken: '' })
+const cfg = ref({ 
+  data_path: '', 
+  download_path: '', 
+  output_path: '', 
+  cookies_path: '', 
+  potoken: '',
+  ytdlp_args: '',
+  ytarchive_args: '',
+  ffmpeg_args: ''
+})
+const showAdvanced = ref(false)
 const saving = ref(false)
 const clearing = ref(false)
 const msg = ref(null)
@@ -84,7 +128,7 @@ onMounted(async () => {
     const res = await axios.get('/api/settings')
     cfg.value = res.data
   } catch (err) {
-    msg.value = { type: 'error', text: 'Failed to load config.' }
+    msg.value = { type: 'error', text: 'Failed to load settings.' }
   }
 })
 
@@ -93,7 +137,7 @@ async function save() {
   msg.value = null
   try {
     await axios.post('/api/settings', cfg.value)
-    msg.value = { type: 'success', text: 'Config saved.' }
+    msg.value = { type: 'success', text: 'Settings saved.' }
   } catch (err) {
     msg.value = { type: 'error', text: err.response?.data?.detail ?? err.message }
   } finally {

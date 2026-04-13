@@ -14,6 +14,9 @@ DEFAULT_CONFIG = {
     "output_path": _OUTPUT_PATH_FROM_ENV or "/app/outputs",
     "cookies_path": "",
     "potoken": "",
+    "ytdlp_args": "",
+    "ytarchive_args": "",
+    "ffmpeg_args": "",
 }
 
 

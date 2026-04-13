@@ -10,16 +10,6 @@
       <div class="panel-label">Source</div>
 
       <div class="field">
-        <label class="field-label">YouTube URL</label>
-        <input
-          type="url"
-          v-model="url"
-          placeholder="https://www.youtube.com/watch?v=..."
-          :disabled="running"
-        />
-      </div>
-
-      <div class="field">
         <label class="field-label">Mode</label>
         <div class="mode-pills">
           <button
@@ -58,12 +48,35 @@
           Re-encode to MP3 320kbps via ffmpeg
         </label>
       </div>
+
+      <div class="field">
+        <label class="field-label">YouTube URL</label>
+        <input
+          type="url"
+          v-model="url"
+          placeholder="https://www.youtube.com/watch?v=..."
+          :disabled="running"
+        />
+      </div>
     </div>
 
     <!-- Actions -->
     <div class="panel">
+      <div v-if="mode === 'livestream' && !poTokenConfigured" class="msg msg-error" style="margin-bottom:16px">
+        <div style="margin-bottom:4px"><strong>PO Token Required</strong></div>
+        <div>
+          Livestream downloads require a PO Token to avoid "Video details not found" errors. 
+          <a href="https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide#guide-providing-a-po-token-manually-for-use-with-mweb-client" target="_blank" style="color:inherit;text-decoration:underline">Follow this guide</a> 
+          to get one, then add it in the <strong>Settings</strong> tab.
+        </div>
+      </div>
+
       <div class="btn-row">
-        <button class="btn btn-primary" @click="startDownload" :disabled="running || !url.trim()">
+        <button 
+          class="btn btn-primary" 
+          @click="startDownload" 
+          :disabled="running || !url.trim() || (mode === 'livestream' && !poTokenConfigured)"
+        >
           <svg v-if="!running" width="13" height="13" viewBox="0 0 13 13" fill="none">
             <path d="M6.5 1v7.5M3 6l3.5 3.5L10 6M1 11.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
@@ -144,7 +157,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import axios from 'axios'
 
 const modes = [
@@ -165,6 +178,7 @@ const url = ref('')
 const mode = ref('video')
 const quality = ref('best')
 const reencodeAudio = ref(false)
+const poTokenConfigured = ref(false)
 
 const running = ref(false)
 const percent = ref(0)
@@ -177,6 +191,13 @@ const showCancelConfirm = ref(false)
 
 let currentJobId = null
 let eventSource = null
+
+onMounted(async () => {
+  try {
+    const res = await axios.get('/api/settings')
+    poTokenConfigured.value = !!res.data.potoken
+  } catch (_) {}
+})
 
 const startDownload = async () => {
   if (!url.value.trim()) return

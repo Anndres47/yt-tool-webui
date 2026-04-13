@@ -9,16 +9,20 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 - **Download** YouTube videos, livestreams, and audio — powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ytarchive](https://github.com/Kethsar/ytarchive)
 - **Quality selector** for video: Best, 1080p, 720p, 480p, 360p
 - **Audio mode** — download best audio stream, optionally re-encode to MP3 320kbps via ffmpeg
-- **Livestream support** — tracks catch-up progress, switches to a live indicator when reaching the live edge; Abort & Save stops recording and muxes the file up to that point
-- **Real-time progress bars** via Server-Sent Events (SSE) — no polling
-- **FFmpeg Cutter** — trim any video or audio file without re-encoding
-  - **Library picker** — select a file already in the downloads folder, streamed directly to the browser via HTTP range requests; no upload needed
-  - **Upload fallback** — upload an external file (up to 1 GB) for cutting; **optimized for low RAM usage** via streaming chunked uploads
-  - **Native video preview** — seek anywhere in the file inside the browser before setting cut points
-  - **Set from playhead** — play to the exact frame you want, click to capture start/end time
-  - **Optional audio re-encode** — cut output re-encodes audio to MP3 320kbps via ffmpeg; video is always stream-copied (no quality loss, no re-encode)
-- **Settings panel** — configure download path, cookies.txt path, and PO token from the UI; persisted on the server
-- **Command log** — every CLI command executed is timestamped and logged to `data/logs/commands.log`
+- **Livestream support** — tracks catch-up progress, shows segment count, and pulses when live; Abort & Save automatically muxes segments using the `--merge` flag.
+- **Real-time progress bars** — SSE progress for downloads and real-time segment tracking for streams.
+- **FFmpeg Cutter** — trim any video or audio file.
+  - **Instant Cut** — use stream copy (`-c:v copy`) for near-instant results with zero quality loss.
+  - **Full Re-encode (Slow)** — optional transcoding to H.264/AAC for maximum compatibility across all devices.
+  - **Library picker** — select files from `outputs/` or `outputs/ffmpeg/`, streamed via HTTP range requests.
+  - **Native video preview** — seek and set cut points from the playhead.
+- **Surgical Cleanup** — each download runs in a unique temp directory; cancelling a video download wipes only that specific job's leftovers.
+- **Settings panel** — configure Data, Download (temp), and Output paths directly from the UI.
+- **Advanced Settings** — pass custom CLI arguments to `yt-dlp`, `ytarchive`, and `ffmpeg` for specialized workflows.
+- **PO Token Validation** — built-in check for livestreams to prevent "Video details not found" errors with a direct link to the setup guide.
+- **Cancel Cut** — instantly stop slow re-encodes with automatic cleanup of unfinished files.
+- **Persistent UI State** — navigate between tabs without losing progress or input data thanks to Vue's `KeepAlive`.
+- **Command log** — every CLI command executed is timestamped and logged to `data/logs/commands.log`.
 
 ---
 
@@ -65,7 +69,7 @@ yt-tool-webui/
 │   └── components/
 │       ├── YtDownloader.vue   # Tab 1 — download
 │       ├── FfmpegCutter.vue   # Tab 2 — cut
-│       └── Settings.vue       # Tab 3 — config
+│       └── Settings.vue       # Tab 3 — settings
 ├── Dockerfile
 ├── docker-compose.yml
 ├── data/                # Internal state (config.json, jobs.json, logs/)
@@ -92,14 +96,18 @@ Open `http://<host-ip>:8047`.
 
 The `data/`, `downloads/`, and `outputs/` directories are created automatically on your host and mapped into the container. 
 
+- **data/**: Your settings and job history.
+- **downloads/**: Where temporary files live during the download process.
+- **outputs/**: Where your finished files appear once complete.
+
 ### Updating
 
 ```bash
 docker compose down
-docker compose up --build
+docker compose up -d --build
 ```
 
-Your `./data` directory is untouched.
+Your volumes are untouched.
 
 ### Changing the port
 
@@ -114,7 +122,7 @@ ports:
 
 ## Configuration
 
-All settings are available in the **Config** tab of the UI.
+All settings are available in the **Settings** tab of the UI.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -122,10 +130,13 @@ All settings are available in the **Config** tab of the UI.
 | Download path | `/app/downloads` | Temporary working directory for active downloads. |
 | Output path | `/app/outputs` | Where finished files are moved upon completion. |
 | Cookies.txt path | _(empty)_ | Absolute path to a Netscape-format cookies file inside the container. |
+| yt-dlp args | _(empty)_ | Additional CLI arguments for all `yt-dlp` commands. |
+| ytarchive args | _(empty)_ | Additional CLI arguments for all `ytarchive` commands. |
+| FFmpeg args | _(empty)_ | Additional CLI arguments for FFmpeg cut/re-encode. |
 
 ### Using cookies
 
-Place your `cookies.txt` in the `./data/` folder on your host, then set the path to `/app/data/cookies.txt` in the Config tab.
+Place your `cookies.txt` in the `./data/` folder on your host, then set the path to `/app/data/cookies.txt` in the Settings tab.
 
 ---
 
@@ -137,26 +148,25 @@ Place your `cookies.txt` in the `./data/` folder on your host, then set the path
 Browser  →  POST /api/download  →  FastAPI spawns subprocess  →  yt-dlp or ytarchive
          ←  { job_id }
          →  GET /api/download/progress/{job_id}  (EventSource / SSE)
-         ←  data: { percent, speed, eta }  (streaming, line by line from stdout)
+         ←  data: { percent, speed, eta } or { segments, live }
          ←  data: { done: true }
 ```
 
-1. The browser POSTs the URL, mode, and quality as `multipart/form-data`.
-2. The backend builds the CLI command, logs it, spawns it with `asyncio.create_subprocess_exec`, stores the job metadata in a persistent store (`jobs.json`), and returns a `job_id`.
-3. The browser opens an `EventSource` connection to the progress endpoint.
-4. The backend reads the subprocess stdout line by line. For yt-dlp it parses `[download] 42.3% of 1.23GiB at 3.21MiB/s ETA 00:12`. For ytarchive it parses segment counts and detects the live edge.
-5. Parsed events are emitted as SSE frames: `data: {"percent": 42.3, "speed": "3.21MiB/s", "eta": "00:12"}`.
-6. Cancel (video/audio) sends `SIGTERM` to yt-dlp, which cleans up its `.part` files. Abort & Save (livestream) sends `SIGINT` to ytarchive, which muxes and saves everything recorded so far.
+1. The browser POSTs the URL, mode, and quality.
+2. The backend creates a **job-specific temp directory** under `downloads/` to isolate files.
+3. The backend builds the CLI command (adding `--newline` for real-time log parsing and `--merge` for ytarchive reliability).
+4. Subprocess stdout is piped to both the browser (SSE) and the console (`docker logs`) with ANSI error highlighting.
+5. Upon completion, `yt-dlp` (via `--paths home`) or the backend move the finished file to `outputs/` and purge the temp directory.
 
 ### Job Persistence & Recovery
 
 The backend tracks all jobs in a `JobManager` that persists to `data/jobs.json`. This enables:
 - **Resilient State:** If the server restarts, orphaned downloads are identified on startup and marked as "interrupted."
 - **Smart Cancellation:** 
-  - **Livestreams:** Aborting a livestream prompts the user to either **Keep & Mux** (graceful stop with `SIGINT`) or **Delete All** (forced stop with cleanup).
+  - **Livestreams:** Aborting a livestream prompts the user to either **Keep & Mux** (graceful stop with `SIGINT` + `--merge`) or **Delete All** (forced stop with cleanup of the job temp folder).
   - **Regular Downloads:** Users can choose to stop and keep partial files or perform a full cleanup.
 - **Livestream Finalization:** Interrupted livestreams can be manually muxed from remaining `.ts` segments via a dedicated recovery endpoint.
-- **History:** Completed, cancelled, and interrupted jobs remain in the list until manually cleared from the Config tab.
+- **History:** Completed, cancelled, and interrupted jobs remain in the list until manually cleared from the Settings tab.
 
 ### FFmpeg cut flow
 
@@ -165,42 +175,32 @@ Browser  →  POST /api/ffmpeg/cut  (library_path or uploaded file)
          ←  { job_id }
          →  GET /api/ffmpeg/progress/{job_id}  (EventSource / SSE)
          ←  data: { percent: 67.1 }
-         ←  data: { done: true, output: "/app/downloads/clip.mp4" }
+         ←  data: { done: true, output: "/app/outputs/ffmpeg/clip.mp4" }
 ```
 
-The ffmpeg command used:
-
+The tool defaults to **Instant Cut** (Stream Copy) for zero quality loss. Enabling **Full Re-encode** uses:
 ```
-ffmpeg -y -ss <start> -i <input> -t <duration> -c:v copy -c:a [copy|libmp3lame -b:a 320k] -progress pipe:1 -nostats <output>
+ffmpeg -y -ss <start> -i <input> -t <duration> -c:v libx264 -crf 23 -preset superfast -c:a aac -b:a 192k ...
 ```
 
 Key flags:
-- `-ss` **before** `-i` — input-level seek, fast even for large files
-- `-t` — duration of the clip (computed as `end - start` on the backend)
-- `-c:v copy` — video stream is never re-encoded; cut is keyframe-accurate and instantaneous
-- `-c:a copy` or `libmp3lame -b:a 320k` — audio is either copied or re-encoded to MP3 320kbps
-- `-progress pipe:1` — ffmpeg writes machine-readable `key=value` progress lines to stdout; the backend parses `out_time_us` and computes `percent = out_time_us / (duration_s × 1,000,000) × 100`
-- The original source file is **never modified**
-
-**Backend Features:**
-- **RAM Optimization:** Uploaded files are streamed in chunks to disk rather than loaded entirely into memory, keeping the footprint minimal even for 1GB uploads.
-- **Security:** Output filenames are sanitized to prevent path traversal.
+- `-ss` **before** `-i` — input-level seek, fast even for large files.
+- `-t` — duration of the clip (computed as `end - start` on the backend).
+- `-c:v copy` — used by default; video stream is never re-encoded; cut is instantaneous.
+- `-progress pipe:1` — ffmpeg writes machine-readable `key=value` progress lines to stdout.
+- All edited clips are saved to the `outputs/ffmpeg/` subdirectory.
 
 ### Library streaming
 
-Files already in the downloads folder are served via `GET /api/library/stream/{filename}` with full HTTP `Range` header support (206 Partial Content). The browser's native `<video>` element uses range requests to seek instantly without downloading the whole file. No upload is needed — the file stays on the server.
+Files are scanned from `outputs/` and `outputs/ffmpeg/` and served via `GET /api/library/stream/{folder}/{filename}` with full HTTP `Range` header support (206 Partial Content). The browser's native `<video>` element uses range requests to seek instantly without downloading the whole file.
 
 ### Settings persistence
 
-`config.py` stores `config.json` inside the downloads directory (`/app/downloads/config.json`), which maps to `./data/config.json` on the host. Because the downloads directory is already a Docker volume, the config survives container restarts and rebuilds automatically — no separate volume mount needed.
+`config.py` stores `config.json` inside the data directory (`/app/data/config.json`), which maps to `./data/config.json` on the host. Because the data directory is a Docker volume, the config survives container restarts and rebuilds automatically.
 
 ### Command logging
 
-Every CLI command is appended to `data/logs/commands.log` before execution:
-
-```
-2026-04-11T14:32:01Z  [job:a3f91c2e]  yt-dlp https://youtube.com/... -f bestvideo+bestaudio/best -o /app/downloads/%(title)s.%(ext)s
-```
+Every CLI command is timestamped and logged to `data/logs/commands.log` before execution. Progress is also printed to standard output for real-time monitoring via `docker logs`.
 
 ---
 
@@ -208,18 +208,20 @@ Every CLI command is appended to `data/logs/commands.log` before execution:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/settings` | Return current config |
-| `POST` | `/api/settings` | Save config (JSON body) |
+| `GET` | `/api/settings` | Return current settings |
+| `POST` | `/api/settings` | Save settings (JSON body) |
 | `GET` | `/api/jobs` | List all tracked jobs (active/done/interrupted/cancelled) |
 | `POST` | `/api/jobs/clear` | Clear completed/cancelled job history |
 | `POST` | `/api/jobs/finalize/{id}` | Recover/mux interrupted livestream segments |
-| `GET` | `/api/library` | List files in download folder |
-| `GET` | `/api/library/stream/{filename}` | Stream file with Range support |
+| `GET` | `/api/library` | List files in `outputs` and `outputs/ffmpeg` |
+| `GET` | `/api/library/stream/{f}/{n}` | Stream file with Range support |
 | `POST` | `/api/download` | Start download, return `{job_id}` |
-| `GET` | `/api/download/progress/{job_id}` | SSE progress stream |
-| `POST` | `/api/download/cancel/{job_id}` | Cancel / abort download |
+| `GET` | `/api/download/progress/{id}` | SSE progress stream |
+| `POST` | `/api/download/cancel/{id}` | Cancel / abort download |
 | `POST` | `/api/ffmpeg/cut` | Start ffmpeg cut, return `{job_id}` |
-| `GET` | `/api/ffmpeg/progress/{job_id}` | SSE ffmpeg progress stream |
+| `GET` | `/api/ffmpeg/progress/{id}` | SSE ffmpeg progress stream |
+| `POST` | `/api/ffmpeg/cancel/{id}` | Cancel active FFmpeg process |
+
 
 ---
 
@@ -250,9 +252,8 @@ npm run dev
 ## Limitations
 
 - **No authentication** — anyone on the network can access the UI. Run behind a VPN or reverse proxy with auth (e.g. Caddy + basic auth, or Authelia) if exposed beyond localhost.
-- **No download queue** — multiple downloads can run in parallel, each with its own job ID, but there is no queue or concurrency limit.
-- **Keyframe-accurate cuts only** — because `-c:v copy` is used, the cut start point snaps to the nearest keyframe. For most content (especially livestream recordings) this is a fraction of a second. For frame-exact cuts a full re-encode would be needed.
-- **Livestream progress is approximate** — ytarchive does not report a reliable percentage for ongoing streams; the UI shows segment count during catch-up and switches to an indeterminate bar at the live edge.
+- **Keyframe-accurate cuts only** — when using Instant Cut, the start point snaps to the nearest keyframe. Use Full Re-encode for exact frame accuracy.
+- **Livestream progress is approximate** — ytarchive does not report a reliable percentage for ongoing streams; the UI shows segment count during catch-up and capture.
 - **Persistent job store** — active and past jobs are saved to `data/jobs.json`. While this survives container restarts, active subprocesses are still orphaned if the container is killed.
 
 ---

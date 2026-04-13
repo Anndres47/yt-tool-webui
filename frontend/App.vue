@@ -36,9 +36,11 @@
     <main class="main-content">
       <div class="content-inner">
         <Transition name="panel" mode="out-in">
-          <YtDownloader v-if="activeTab === 'download'" key="download" />
-          <FfmpegCutter v-else-if="activeTab === 'ffmpeg'" key="ffmpeg" />
-          <Settings v-else-if="activeTab === 'settings'" key="settings" />
+          <KeepAlive>
+            <YtDownloader v-if="activeTab === 'download'" />
+            <FfmpegCutter v-else-if="activeTab === 'ffmpeg'" />
+            <Settings v-else-if="activeTab === 'settings'" />
+          </KeepAlive>
         </Transition>
       </div>
     </main>
@@ -65,8 +67,8 @@ const tabs = [
   },
   {
     id: 'settings',
-    label: 'Config',
-    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5l1.5-1.5M11 5l1.5-1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`
+    label: 'Settings',
+    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z" stroke="currentColor" stroke-width="1.5"/><path d="M7 1.5h2l.5 2.2.8.3 2-1.3 1.4 1.4-1.3 2 .3.8 2.2.5v2l-2.2.5-.3.8 1.3 2-1.4 1.4-2-1.3-.8.3-.5 2.2H7l-.5-2.2-.8-.3-2 1.3-1.4-1.4 1.3-2-.3-.8-2.2-.5v-2l2.2-.5.3-.8-1.3-2 1.4-1.4 2 1.3.8-.3.5-2.2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`
   },
 ]
 </script>
@@ -622,8 +624,9 @@ select option { background: var(--surface2); color: var(--text); }
 }
 
 .source-tab:last-child { border-right: none; }
-.source-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.source-tab:hover:not(:disabled) { color: var(--text); background: rgba(255,255,255,0.04); }
 .source-tab.active { color: var(--accent); background: var(--accent-dim); }
+.source-tab:disabled { cursor: not-allowed; opacity: 0.4; }
 
 /* ── Video preview ─────────────────────────────────── */
 .preview-wrap {

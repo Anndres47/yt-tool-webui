@@ -10,22 +10,22 @@
       <div class="panel-label">Source</div>
 
       <div class="source-tabs">
-        <button :class="['source-tab', { active: sourceTab === 'library' }]" @click="switchSource('library')">Library</button>
-        <button :class="['source-tab', { active: sourceTab === 'upload' }]" @click="switchSource('upload')">Upload · max 1 GB</button>
+        <button :class="['source-tab', { active: sourceTab === 'library' }]" @click="switchSource('library')" :disabled="cutting">Library</button>
+        <button :class="['source-tab', { active: sourceTab === 'upload' }]" @click="switchSource('upload')" :disabled="cutting">Upload · max 1 GB</button>
       </div>
 
       <!-- Library picker -->
       <template v-if="sourceTab === 'library'">
         <div class="field">
           <label class="field-label">File from library</label>
-          <select v-model="libraryFile" @change="onLibrarySelect">
+          <select v-model="libraryFile" @change="onLibrarySelect" :disabled="cutting">
             <option value="">— select a file —</option>
             <option v-for="f in libraryFiles" :key="f.path" :value="f.path">
               [{{ f.folder }}] {{ f.name }}  ({{ formatSize(f.size) }})
             </option>
           </select>
         </div>
-        <button class="btn btn-ghost" style="font-size:11px;padding:6px 12px" @click="loadLibrary">
+        <button class="btn btn-ghost" style="font-size:11px;padding:6px 12px" @click="loadLibrary" :disabled="cutting">
           <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M10 5.5A4.5 4.5 0 1 1 5.5 1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M10 1v4H6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Refresh
         </button>
@@ -36,8 +36,8 @@
 
       <!-- Upload -->
       <template v-else>
-        <div class="file-drop">
-          <input type="file" accept="video/*,audio/*" @change="onFileUpload" />
+        <div class="file-drop" :style="{ opacity: cutting ? 0.5 : 1, pointerEvents: cutting ? 'none' : 'auto' }">
+          <input type="file" accept="video/*,audio/*" @change="onFileUpload" :disabled="cutting" />
           <div class="file-drop-text">
             <strong>Click to select a file</strong>
             video or audio · max 1 GB
@@ -66,7 +66,7 @@
         </div>
 
         <!-- Scrubbers -->
-        <div class="scrubbers">
+        <div class="scrubbers" :style="{ opacity: cutting ? 0.5 : 1, pointerEvents: cutting ? 'none' : 'auto' }">
           <div>
             <div class="scrubber-label">
               <span>Start</span>
@@ -79,8 +79,9 @@
               :max="duration"
               step="0.1"
               @input="seekMedia(startTime)"
+              :disabled="cutting"
             />
-            <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('start')">
+            <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('start')" :disabled="cutting">
               Set from playhead
             </button>
           </div>
@@ -96,8 +97,9 @@
               :max="duration"
               step="0.1"
               @input="seekMedia(endTime)"
+              :disabled="cutting"
             />
-            <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('end')">
+            <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('end')" :disabled="cutting">
               Set from playhead
             </button>
           </div>
@@ -147,6 +149,17 @@
           <span v-if="cutting" class="spinner"></span>
           {{ cutting ? 'Cutting…' : 'Cut' }}
         </button>
+
+        <button
+          v-if="cutting"
+          class="btn btn-danger"
+          @click="cancelCut"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+          Cancel Cut
+        </button>
       </div>
 
       <!-- Progress -->
@@ -189,6 +202,8 @@ const reencodeFull = ref(false)
 const cutting = ref(false)
 const cutPercent = ref(0)
 const cutMsg = ref(null)
+let activeJobId = null
+let eventSource = null
 
 const AUDIO_EXT = new Set(['.mp3', '.m4a', '.aac', '.opus', '.ogg', '.flac', '.wav'])
 
@@ -285,6 +300,17 @@ function formatSize(bytes) {
   return (bytes / 1e3).toFixed(0) + ' KB'
 }
 
+async function cancelCut() {
+  if (!activeJobId) return
+  try {
+    eventSource?.close()
+    eventSource = null
+    await axios.post(`/api/ffmpeg/cancel/${activeJobId}`)
+    cutMsg.value = { type: 'info', text: 'Cut cancelled by user.' }
+    cutting.value = false
+  } catch (_) {}
+}
+
 async function cut() {
   if (!previewSrc.value || !outputName.value.trim()) return
   if (startTime.value >= endTime.value) {
@@ -314,30 +340,36 @@ async function cut() {
 
     const res = await axios.post('/api/ffmpeg/cut', form)
     const jobId = res.data.job_id
+    activeJobId = jobId
 
-    const es = new EventSource(`/api/ffmpeg/progress/${jobId}`)
-    es.onmessage = (e) => {
+    eventSource = new EventSource(`/api/ffmpeg/progress/${jobId}`)
+    eventSource.onmessage = (e) => {
       const data = JSON.parse(e.data)
       if (data.error) {
         cutMsg.value = { type: 'error', text: data.error }
         cutting.value = false
-        es.close()
+        eventSource?.close()
+        eventSource = null
         return
       }
       if (data.done) {
         cutPercent.value = 100
         cutMsg.value = { type: 'success', text: `Saved to: ${data.output}` }
         cutting.value = false
-        es.close()
+        eventSource?.close()
+        eventSource = null
         loadLibrary()
         return
       }
       if (data.percent !== undefined) cutPercent.value = data.percent
     }
-    es.onerror = () => {
-      cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
-      cutting.value = false
-      es.close()
+    eventSource.onerror = () => {
+      if (cutting.value) {
+        cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
+        cutting.value = false
+        eventSource?.close()
+        eventSource = null
+      }
     }
   } catch (err) {
     cutMsg.value = { type: 'error', text: err.response?.data?.detail ?? err.message }
