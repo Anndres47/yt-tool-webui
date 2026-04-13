@@ -961,6 +961,69 @@ frontend_dir = os.path.join(os.path.dirname(__file__), "..", "frontend")
 if os.path.isdir(frontend_dir):
     app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="static")
 
+async def auto_recover_livestreams(job_ids: list[str]):
+    """Automatically trigger FFmpeg muxing for multiple interrupted livestreams."""
+    for jid in job_ids:
+        job = job_manager.get_job(jid)
+        if not job: continue
+
+        if job.get("mode") != "livestream":
+            # Just log a warning for regular downloads
+            url = job.get("url", "Unknown URL")
+            print(f"\033[93m[System] WARNING: Video/Audio download was aborted unexpectedly: {jid[:8]} (URL: {url})\033[0m", flush=True)
+            
+            # ALWAYS CLEAN UP regular downloads on restart
+            temp_dir = job.get("temp_dir")
+            if temp_dir and os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir)
+                    print(f"[System] Cleaned up temporary files for aborted job: {jid[:8]}", flush=True)
+                except:
+                    pass
+            continue
+
+        print(f"[System] Attempting auto-recovery for interrupted livestream: {jid[:8]}", flush=True)
+        try:
+            dl_path = get_config()["download_path"]
+...
+
+            out_path = get_config()["output_path"]
+            
+            # Use the job's specific temp dir if it exists, otherwise fallback to main dl_path
+            target_dir = job.get("temp_dir") or dl_path
+            ts_files = sorted(Path(target_dir).glob("*.ts"))
+            
+            if not ts_files:
+                print(f"[System] No segments found for recovery: {jid[:8]}", flush=True)
+                continue
+
+            # Prefix the output name to show it was recovered
+            output_file = f"{out_path}/[RECOVERED]_{jid[:8]}.mp4"
+            
+            concat_file = Path(target_dir) / f"concat_recovery_{jid}.txt"
+            with open(concat_file, "w") as f:
+                for ts in ts_files:
+                    safe_path = str(ts.resolve()).replace("'", "'\\''")
+                    f.write(f"file '{safe_path}'\n")
+
+            cmd = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", str(concat_file), "-c", "copy", output_file
+            ]
+            
+            log_command(jid, cmd)
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Use the same watch_job logic to handle the finish and cleanup
+            job_manager.update_job(jid, {"status": "running", "type": "finalize"})
+            job_manager.processes[jid] = process
+            asyncio.create_task(watch_job(jid, process))
+            
+        except Exception as e:
+            print(f"\033[91m[System] Recovery failed for {jid[:8]}: {e}\033[0m", flush=True)
+
 
 if __name__ == "__main__":
     import uvicorn
@@ -971,5 +1034,10 @@ if __name__ == "__main__":
     
     # Ensure ffmpeg subfolder exists
     Path(cfg["output_path"], "ffmpeg").mkdir(parents=True, exist_ok=True)
+    
+    # Identify and recover interrupted livestreams
+    to_recover = job_manager.cleanup_on_startup()
+    if to_recover:
+        asyncio.run(auto_recover_livestreams(to_recover))
     
     uvicorn.run(app, host="0.0.0.0", port=8047)
