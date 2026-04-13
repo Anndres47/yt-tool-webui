@@ -34,13 +34,24 @@ async def get_auto_potoken() -> tuple[str, str]:
                     data=b"{}", 
                     headers={'Content-Type': 'application/json'}
                 )
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    res_data = json.loads(response.read())
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    raw_res = response.read()
+                    res_data = json.loads(raw_res)
+                    # Debug: Print raw response to help identify keys
+                    print(f"[PO Token] Raw Provider Response: {raw_res.decode()}", flush=True)
+
                     # Check multiple common keys for the token
                     token = res_data.get("po_token") or res_data.get("poToken") or res_data.get("token") or ""
-                    visitor_id = res_data.get("visit_identifier") or res_data.get("visitorData") or ""
+                    # Check multiple common keys for the visitor id
+                    visitor_id = (
+                        res_data.get("visit_identifier") or 
+                        res_data.get("visitor_data") or 
+                        res_data.get("visitorData") or 
+                        res_data.get("visitor_id") or ""
+                    )
                     if token:
                         return token, visitor_id
+
             except Exception as e:
                 if attempt < max_attempts - 1:
                     print(f"\033[93m[PO Token] Attempt {attempt + 1} failed, retrying... ({e})\033[0m", flush=True)
