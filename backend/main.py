@@ -26,10 +26,15 @@ async def get_auto_potoken() -> tuple[str, str]:
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                # Using GET instead of POST for better compatibility
+                # Must use POST with a body for /get_pot
                 # Increase timeout to 30s for slower environments
                 url = "http://pot-provider:4416/get_pot"
-                with urllib.request.urlopen(url, timeout=30) as response:
+                req = urllib.request.Request(
+                    url, 
+                    data=b"{}", 
+                    headers={'Content-Type': 'application/json'}
+                )
+                with urllib.request.urlopen(req, timeout=30) as response:
                     res_data = json.loads(response.read())
                     # Check multiple common keys for the token
                     token = res_data.get("po_token") or res_data.get("poToken") or res_data.get("token") or ""
