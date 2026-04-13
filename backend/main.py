@@ -26,23 +26,21 @@ async def get_auto_potoken() -> tuple[str, str]:
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                # Use a long timeout (30s) as token generation can be slow
-                req = urllib.request.Request(
-                    "http://pot-provider:4416/get_pot", 
-                    data=b"{}", 
-                    headers={'Content-Type': 'application/json'}
-                )
-                with urllib.request.urlopen(req, timeout=30) as response:
+                # Using GET instead of POST for better compatibility
+                # Increase timeout to 30s for slower environments
+                url = "http://pot-provider:4416/get_pot"
+                with urllib.request.urlopen(url, timeout=30) as response:
                     res_data = json.loads(response.read())
-                    token = res_data.get("po_token", "")
-                    visitor_id = res_data.get("visit_identifier", "")
+                    # Check multiple common keys for the token
+                    token = res_data.get("po_token") or res_data.get("poToken") or res_data.get("token") or ""
+                    visitor_id = res_data.get("visit_identifier") or res_data.get("visitorData") or ""
                     if token:
                         return token, visitor_id
             except Exception as e:
                 if attempt < max_attempts - 1:
                     print(f"\033[93m[PO Token] Attempt {attempt + 1} failed, retrying... ({e})\033[0m", flush=True)
                     import time
-                    time.sleep(2)
+                    time.sleep(3)
                 else:
                     print(f"\033[91m[PO Token] ERROR: All fetch attempts failed: {e}\033[0m", flush=True)
         return "", ""
@@ -51,12 +49,14 @@ async def get_auto_potoken() -> tuple[str, str]:
 
 # Startup Check for PO Token Provider
 async def check_pot_connectivity():
+    # Wait 5 seconds for the sidecar container to finish booting
+    await asyncio.sleep(5)
     print("[System] Checking connectivity to PO Token provider...", flush=True)
     token, _ = await get_auto_potoken()
     if token:
         print("\033[92m[System] PO Token Provider is REACHABLE and functional.\033[0m", flush=True)
     else:
-        print("\033[93m[System] WARNING: PO Token Provider is unreachable or slow. Auto-token may fail on first try.\033[0m", flush=True)
+        print("\033[93m[System] WARNING: PO Token Provider is unreachable. Auto-token may fail.\033[0m", flush=True)
 
 
 app = FastAPI()
