@@ -146,7 +146,13 @@ async def api_save_settings(request: Request):
 
 @app.get("/api/jobs")
 def api_get_jobs():
-    return job_manager.get_all_jobs()
+    # Clean up jobs dict to ensure it's JSON serializable (remove process objects)
+    all_jobs = job_manager.get_all_jobs()
+    clean_jobs = {}
+    for jid, job in all_jobs.items():
+        clean_job = {k: v for k, v in job.items() if k != "process"}
+        clean_jobs[jid] = clean_job
+    return clean_jobs
 
 
 @app.post("/api/jobs/clear")
@@ -509,11 +515,15 @@ async def api_download_progress(job_id: str):
                 event = None
 
                 if mode == "livestream":
-                    # ytarchive progress: "Video Segments: 123 (4.5MB)  /  128"
-                    # Handle "Video Segments: 123" or "Audio Segments: 123"
-                    seg_match = re.search(r"(?:Video|Audio) Segments:\s*(\d+)", line, re.IGNORECASE)
+                    # ytarchive progress parsing
+                    # Support dreammu fork: "Video Fragments: 76; Audio Fragments: 83"
+                    # And original: "Video Segments: 76"
+                    seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
                     if seg_match:
-                        segments = int(seg_match.group(1))
+                        # Extract all numbers found in the line to sum Video + Audio if available
+                        all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
+                        segments = sum(int(n) for n in all_nums)
+                        
                         # Check if live: ytarchive prints "at the live edge" or similar
                         is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
                         event = json.dumps({
