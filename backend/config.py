@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {
     "video_format": "mp4",
     "audio_format": "mp3",
     "reencode_audio_instant": False,
+    "disable_ytdlp_potoken": False,
 }
 
 

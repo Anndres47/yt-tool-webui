@@ -101,6 +101,20 @@
             Re-encode Audio on Instant Cut (Fixes WMP compatibility)
           </label>
         </div>
+
+        <div class="field" style="margin-top:14px">
+          <label
+            :class="['toggle-row', { checked: cfg.disable_ytdlp_potoken }]"
+            @click="cfg.disable_ytdlp_potoken = !cfg.disable_ytdlp_potoken"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Disable PO Token for standard downloads (yt-dlp)
+          </label>
+        </div>
       </div>
     </div>
 
@@ -152,7 +166,8 @@ const cfg = ref({
   ffmpeg_args: '',
   video_format: 'mp4',
   audio_format: 'mp3',
-  reencode_audio_instant: false
+  reencode_audio_instant: false,
+  disable_ytdlp_potoken: false
 })
 const showAdvanced = ref(false)
 const saving = ref(false)

@@ -394,9 +394,17 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
     cfg = get_config()
     job_id = str(uuid.uuid4())
     potoken, visitor_id = "", ""
-    if len(cfg.get("potoken", "").strip()) < 20:
-        potoken, visitor_id = await get_auto_potoken()
-    else: potoken = cfg["potoken"].strip()
+    
+    # Logic: Livestream MUST have a token. Video/Audio can skip if configured.
+    should_fetch_token = mode == "livestream" or not cfg.get("disable_ytdlp_potoken")
+    
+    if should_fetch_token:
+        if len(cfg.get("potoken", "").strip()) < 20:
+            potoken, visitor_id = await get_auto_potoken()
+        else:
+            potoken = cfg["potoken"].strip()
+    else:
+        print(f"[job:{job_id[:8]}] Skipping PO Token for {mode} (Disabled by user)", flush=True)
 
     if len([j for j in job_manager.get_all_jobs().values() if j.get("type") == "download" and j.get("status") == "running"]) >= 5:
         raise HTTPException(status_code=429, detail="Limit reached")
