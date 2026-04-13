@@ -473,7 +473,7 @@ async def api_download(
             token_arg = f"po_token=web+{potoken}"
             if visitor_id:
                 token_arg += f";visitor_data={visitor_id}"
-            cmd += ["--extractor-args", f"youtube:player-client=web,ios;{token_arg}"]
+            cmd += ["--extractor-args", f"youtube:player-client=web;{token_arg}"]
         
         # Append advanced arguments
         if cfg.get("ytdlp_args"):
@@ -494,7 +494,7 @@ async def api_download(
             token_arg = f"po_token=web+{potoken}"
             if visitor_id:
                 token_arg += f";visitor_data={visitor_id}"
-            cmd += ["--extractor-args", f"youtube:player-client=web,ios;{token_arg}"]
+            cmd += ["--extractor-args", f"youtube:player-client=web;{token_arg}"]
         
         # Append advanced arguments
         if cfg.get("ytdlp_args"):
@@ -552,8 +552,8 @@ async def api_download_progress(job_id: str):
             # Only read while the process is alive
             while process.returncode is None:
                 try:
-                    # Read chunks instead of whole lines to catch carriage returns (\r)
-                    chunk_bytes = await asyncio.wait_for(process.stdout.read(1024), timeout=15.0)
+                    # Read small chunks to catch carriage returns (\r) instantly
+                    chunk_bytes = await asyncio.wait_for(process.stdout.read(128), timeout=15.0)
                     if not chunk_bytes:
                         break
                     
@@ -614,10 +614,12 @@ async def api_download_progress(job_id: str):
 
                         if event:
                             yield f"data: {event}\n\n"
-                            # Small sleep to prevent SSE flooding
-                            await asyncio.sleep(0.05)
+                            # Balanced sleep: fluid for eyes, gentle on CPU
+                            await asyncio.sleep(0.1)
 
                 except asyncio.TimeoutError:
+                    # HEARTBEAT: If no progress for 15s, send a ping to keep SSE alive.
+                    # WATCHDOG: If no progress for 120s total, kill the job.
                     stalled_seconds += 15
                     if stalled_seconds >= 120:
                         # WATCHDOG: Kill process
