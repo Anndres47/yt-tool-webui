@@ -1007,8 +1007,6 @@ async def auto_recover_livestreams(job_ids: list[str]):
         print(f"[System] Attempting auto-recovery for interrupted livestream: {jid[:8]}", flush=True)
         try:
             dl_path = get_config()["download_path"]
-...
-
             out_path = get_config()["output_path"]
             
             # Use the job's specific temp dir if it exists, otherwise fallback to main dl_path
