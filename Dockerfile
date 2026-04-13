@@ -8,7 +8,9 @@ RUN npm run build
 # Build dreammu/ytarchive fork to support --visitor-data
 FROM golang:alpine AS ytarchive-builder
 RUN apk add --no-cache git
-RUN go install github.com/dreammu/ytarchive@dev
+WORKDIR /build
+RUN git clone --branch dev https://github.com/dreammu/ytarchive.git .
+RUN go build -o /go/bin/ytarchive .
 
 FROM python:3.11-slim AS backend
 WORKDIR /app
