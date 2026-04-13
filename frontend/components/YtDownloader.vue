@@ -108,18 +108,22 @@
         <!-- Inline Cancel Confirmation -->
         <div v-if="task.showCancelConfirm" class="msg msg-info task-cancel-dialog">
           <template v-if="task.mode === 'livestream'">
-            <div style="font-size:11px;margin-bottom:8px">Keep segments and mux, or delete all?</div>
-            <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
-              <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
-              <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
-              <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">Back</button>
+            <div class="cancel-row">
+              <span class="cancel-text">Abort &amp; Save?</span>
+              <div class="btn-row-right">
+                <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
+                <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
+                <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">Back</button>
+              </div>
             </div>
           </template>
           <template v-else>
-            <div style="font-size:11px;margin-bottom:8px">Cancel download?</div>
-            <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
-              <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
-              <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">No</button>
+            <div class="cancel-row">
+              <span class="cancel-text">Cancel download?</span>
+              <div class="btn-row-right">
+                <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
+                <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">No</button>
+              </div>
             </div>
           </template>
         </div>
@@ -414,7 +418,22 @@ function removeTask(id) {
 }
 .task-cancel-dialog {
   margin: 10px 0;
-  padding: 8px 12px;
+  padding: 6px 12px;
+}
+.cancel-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.cancel-text {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn-row-right {
+  display: flex;
+  gap: 6px;
 }
 .btn-xs {
   padding: 4px 8px;

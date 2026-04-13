@@ -343,9 +343,9 @@ async def api_download(
             # ytarchive expects just "1080p", "720p", etc.
             pass
         
-        # Added --newline for logs and --merge to handle 'Keep & Mux' unattended
-        # Using the unique job_temp_dir for segments
-        cmd = ["ytarchive", "--newline", "--merge", "-td", str(job_temp_dir), url, ytarchive_quality, "-o", f"{out_path}/{{id}}"]
+        # Base options
+        cmd = ["ytarchive", "--newline", "--merge", "-td", str(job_temp_dir), "-o", f"{out_path}/{{id}}"]
+        
         if cookies:
             cmd += ["--cookies", cookies]
         if potoken:
@@ -357,9 +357,13 @@ async def api_download(
         if cfg.get("ytarchive_args"):
             cmd.extend(shlex.split(cfg["ytarchive_args"]))
 
+        # POSITIONAL ARGS LAST: [url] [quality]
+        cmd.append(url)
+        cmd.append(ytarchive_quality)
+
     elif mode == "audio":
         # --paths temp: is working dir, --paths home: is final dir
-        cmd = ["yt-dlp", "--newline", url, "-f", "bestaudio",
+        cmd = ["yt-dlp", "--newline", "-f", "bestaudio",
                "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{out_path}",
                "-o", "%(title)s.%(ext)s"]
         if reencode_audio == "true":
@@ -379,9 +383,11 @@ async def api_download(
         if cfg.get("ytdlp_args"):
             cmd.extend(shlex.split(cfg["ytdlp_args"]))
 
+        cmd.append(url)
+
     else:  # video
         fmt = QUALITY_MAP.get(quality, QUALITY_MAP["best"])
-        cmd = ["yt-dlp", "--newline", url, "-f", fmt,
+        cmd = ["yt-dlp", "--newline", "-f", fmt,
                "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{out_path}",
                "-o", "%(title)s.%(ext)s"]
         if cookies:
@@ -397,6 +403,8 @@ async def api_download(
         # Append advanced arguments
         if cfg.get("ytdlp_args"):
             cmd.extend(shlex.split(cfg["ytdlp_args"]))
+
+        cmd.append(url)
 
     # Log full command to console for debugging
     print(f"[job:{job_id[:8]}] EXECUTING: {shlex.join(cmd)}", flush=True)
