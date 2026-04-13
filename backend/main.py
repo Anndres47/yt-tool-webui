@@ -90,6 +90,20 @@ async def checkpoint_saver():
             pass
 
 
+async def get_video_title(url: str) -> str:
+    """Fast, non-blocking fetch of video title."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "yt-dlp", "--get-title", url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL
+        )
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10.0)
+        return stdout.decode().strip() or "Unknown Title"
+    except:
+        return "Unknown Title"
+
+
 # Global state for broadcasting progress
 # job_id -> list of asyncio.Queue
 subscribers: dict[str, list[asyncio.Queue]] = {}
@@ -168,8 +182,12 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
     except Exception as e:
         print(f"Broadcaster error for {job_id}: {e}")
     finally:
-        # Cleanup subscribers when process finishes
+        # Final Signal: Wait a moment for the watcher task to set 'done'
+        await asyncio.sleep(0.5)
         if job_id in subscribers:
+            msg = f"data: {json.dumps({'done': True})}\n\n"
+            for q in subscribers[job_id]:
+                await q.put(msg)
             del subscribers[job_id]
 
 
@@ -397,6 +415,7 @@ async def api_library_stream(folder: str, filename: str, request: Request):
 async def api_download(url: str = Form(...), mode: str = Form(...), quality: str = Form("best"), reencode_audio: str = Form("false")):
     cfg = get_config()
     job_id = str(uuid.uuid4())
+    title = await get_video_title(url)
     potoken, visitor_id = "", ""
     
     # Logic: Livestream MUST have a token. Video/Audio can skip if configured.
@@ -437,7 +456,15 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
     print(f"[job:{job_id[:8]}] EXECUTING: {shlex.join(cmd)}", flush=True)
     log_command(job_id, cmd)
     process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    job_manager.add_job(job_id, {"mode": mode, "type": "download", "temp_dir": str(job_temp_dir), "url": url, "status": "running"}, process=process)
+    job_manager.add_job(job_id, {
+        "mode": mode, 
+        "type": "download", 
+        "temp_dir": str(job_temp_dir),
+        "url": url,
+        "title": title,
+        "status": "running"
+    }, process=process)
+
     asyncio.create_task(watch_job(job_id, process))
     asyncio.create_task(broadcast_output(job_id, process, mode))
     return {"job_id": job_id}

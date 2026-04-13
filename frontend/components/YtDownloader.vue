@@ -91,11 +91,12 @@
         <div class="task-header">
           <div class="task-info">
             <span class="task-mode-badge">{{ task.mode }}</span>
+            <div v-if="task.title" class="task-title">{{ task.title }}</div>
             <span class="task-url">{{ task.url }}</span>
           </div>
           <button 
             v-if="!task.done && !task.showCancelConfirm" 
-            :class="['btn btn-sm', task.mode === 'livestream' ? 'btn-danger' : 'btn-ghost']"
+            class="btn btn-danger btn-sm" 
             @click="promptCancel(task)"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
@@ -205,6 +206,7 @@ function addTaskFromJob(id, job) {
   const task = {
     id,
     url: job.url || 'Unknown source',
+    title: job.title || '',
     mode: job.mode || 'video',
     percent: job.percent || 0,
     speed: '',
@@ -261,6 +263,7 @@ const startDownload = async () => {
     const task = {
       id: jobId,
       url: taskUrl,
+      title: '', // Will be updated via the jobs API on next refresh
       mode: taskMode,
       percent: 0,
       speed: '',
@@ -394,6 +397,12 @@ function removeTask(id) {
   letter-spacing: 0.1em;
   color: var(--accent);
   font-weight: 700;
+}
+.task-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.2;
 }
 .task-url {
   font-size: 12px;
