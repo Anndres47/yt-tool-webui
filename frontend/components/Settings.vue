@@ -33,7 +33,7 @@
       <div class="panel-label">Authentication</div>
 
       <div class="field">
-        <label class="field-label">PO Token <span style="color:var(--muted);font-weight:400">(optional — bot-protected streams)</span></label>
+        <label class="field-label">PO Token <span style="color:var(--muted);font-weight:400">(REQUIRED for livestreams · optional for others)</span></label>
         <input type="text" v-model="cfg.potoken" placeholder="Paste PO token here" autocomplete="off" />
       </div>
     </div>
@@ -68,6 +68,28 @@
         <div class="field">
           <label class="field-label">FFmpeg additional args</label>
           <input type="text" v-model="cfg.ffmpeg_args" placeholder="e.g. -vf scale=1280:720 -b:v 5M" />
+        </div>
+
+        <div class="field-group">
+          <div class="field">
+            <label class="field-label">Default Video Format</label>
+            <select v-model="cfg.video_format">
+              <option value="mp4">MP4 (Standard)</option>
+              <option value="mkv">MKV (Matroska)</option>
+              <option value="mov">MOV (QuickTime)</option>
+              <option value="webm">WebM</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="field-label">Default Audio Format</label>
+            <select v-model="cfg.audio_format">
+              <option value="mp3">MP3 (Standard)</option>
+              <option value="m4a">M4A (AAC)</option>
+              <option value="wav">WAV (Uncompressed)</option>
+              <option value="flac">FLAC (Lossless)</option>
+              <option value="opus">Opus</option>
+            </select>
+          </div>
         </div>
       </div>
     </div>
@@ -116,7 +138,9 @@ const cfg = ref({
   potoken: '',
   ytdlp_args: '',
   ytarchive_args: '',
-  ffmpeg_args: ''
+  ffmpeg_args: '',
+  video_format: 'mp4',
+  audio_format: 'mp3'
 })
 const showAdvanced = ref(false)
 const saving = ref(false)
@@ -159,6 +183,12 @@ async function clearJobs() {
 </script>
 
 <style scoped>
+.field-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 14px;
+}
 .spinner {
   display: inline-block;
   width: 11px;

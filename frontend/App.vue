@@ -63,7 +63,7 @@ const tabs = [
   {
     id: 'ffmpeg',
     label: 'Cutter',
-    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="4" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 4.5l8 6M6 11.5l2.5-1.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`
+    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="4" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 4.5l8 6M6 11.5l8-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`
   },
   {
     id: 'settings',

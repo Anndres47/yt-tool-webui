@@ -6,7 +6,7 @@
     </div>
 
     <!-- URL + Mode -->
-    <div class="panel">
+    <div class="panel" :style="{ opacity: activeTasks.length >= 5 ? 0.5 : 1 }">
       <div class="panel-label">Source</div>
 
       <div class="field">
@@ -16,7 +16,7 @@
             v-for="m in modes"
             :key="m.value"
             :class="['mode-pill', { active: mode === m.value }]"
-            :disabled="running"
+            :disabled="submitting || activeTasks.length >= 5"
             @click="mode = m.value"
           >{{ m.label }}</button>
         </div>
@@ -29,7 +29,7 @@
             v-for="q in qualities"
             :key="q.value"
             :class="['q-pill', { active: quality === q.value }]"
-            :disabled="running"
+            :disabled="submitting || activeTasks.length >= 5"
             @click="quality = q.value"
           >{{ q.label }}</button>
         </div>
@@ -38,7 +38,7 @@
       <div class="field" v-if="mode === 'audio'">
         <label
           :class="['toggle-row', { checked: reencodeAudio }]"
-          @click="!running && (reencodeAudio = !reencodeAudio)"
+          @click="!(submitting || activeTasks.length >= 5) && (reencodeAudio = !reencodeAudio)"
         >
           <div class="toggle-box">
             <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
@@ -55,13 +55,19 @@
           type="url"
           v-model="url"
           placeholder="https://www.youtube.com/watch?v=..."
-          :disabled="running"
+          :disabled="submitting || activeTasks.length >= 5"
+          @keyup.enter="startDownload"
         />
       </div>
     </div>
 
-    <!-- Actions -->
+    <!-- Actions & Limit Disclaimer -->
     <div class="panel">
+      <div v-if="activeTasks.length >= 5" class="msg msg-info" style="margin-bottom:16px">
+        <div style="margin-bottom:4px"><strong>Maximum Limit Reached</strong></div>
+        <div>Maximum concurrent downloads (5) reached. Please wait or cancel an active download to start a new one.</div>
+      </div>
+
       <div v-if="mode === 'livestream' && !poTokenConfigured" class="msg msg-error" style="margin-bottom:16px">
         <div style="margin-bottom:4px"><strong>PO Token Required</strong></div>
         <div>
@@ -75,81 +81,86 @@
         <button 
           class="btn btn-primary" 
           @click="startDownload" 
-          :disabled="running || !url.trim() || (mode === 'livestream' && !poTokenConfigured)"
+          :disabled="submitting || !url.trim() || activeTasks.length >= 5 || (mode === 'livestream' && !poTokenConfigured)"
         >
-          <svg v-if="!running" width="13" height="13" viewBox="0 0 13 13" fill="none">
+          <svg v-if="!submitting" width="13" height="13" viewBox="0 0 13 13" fill="none">
             <path d="M6.5 1v7.5M3 6l3.5 3.5L10 6M1 11.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <span v-if="running" class="spinner"></span>
-          {{ running ? 'Downloading…' : 'Download' }}
-        </button>
-
-        <button
-          v-if="running"
-          class="btn btn-danger"
-          @click="showCancelConfirm = true"
-          :disabled="showCancelConfirm"
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
-          </svg>
-          {{ mode === 'livestream' ? 'Abort & Save' : 'Cancel' }}
+          <span v-if="submitting" class="spinner"></span>
+          {{ submitting ? 'Starting…' : 'Download' }}
         </button>
       </div>
+    </div>
 
-      <!-- Cancel Confirmation -->
-      <div v-if="showCancelConfirm" class="msg msg-info" style="margin-top:16px">
-        <template v-if="mode === 'livestream'">
-          <div style="margin-bottom:8px"><strong>Abort &amp; Save?</strong></div>
-          <div style="margin-bottom:12px;opacity:0.8">
-            Do you want to keep the segments downloaded so far and mux them into a video, or delete everything?
+    <!-- Active Task List -->
+    <div v-if="activeTasks.length > 0" style="margin-top:24px">
+      <div class="panel-label">Active Downloads</div>
+      
+      <div v-for="task in activeTasks" :key="task.id" class="panel task-card" :class="{ 'task-done': task.done }">
+        <div class="task-header">
+          <div class="task-info">
+            <span class="task-mode-badge">{{ task.mode }}</span>
+            <span class="task-url">{{ task.url }}</span>
           </div>
-          <div class="btn-row">
-            <button class="btn btn-primary" style="padding:6px 14px" @click="cancel(false)">Keep &amp; Mux</button>
-            <button class="btn btn-danger" style="padding:6px 14px" @click="cancel(true)">Delete All</button>
-            <button class="btn btn-ghost" style="padding:6px 14px" @click="showCancelConfirm = false">Go Back</button>
-          </div>
-        </template>
-        <template v-else>
-          <div style="margin-bottom:8px"><strong>Cancel download?</strong></div>
-          <div style="margin-bottom:12px;opacity:0.8">
-            Are you sure you want to stop this download? Partial files will be deleted.
-          </div>
-          <div class="btn-row">
-            <button class="btn btn-danger" style="padding:6px 20px" @click="cancel(true)">Yes, Cancel</button>
-            <button class="btn btn-ghost" style="padding:6px 20px" @click="showCancelConfirm = false">No, Continue</button>
-          </div>
-        </template>
-      </div>
+          <button 
+            v-if="!task.done && !task.showCancelConfirm" 
+            class="btn btn-ghost btn-sm" 
+            @click="task.showCancelConfirm = true"
+          >
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+              <rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+            {{ task.mode === 'livestream' ? 'Abort' : 'Cancel' }}
+          </button>
+        </div>
 
-      <!-- Progress -->
-      <div class="progress-block" v-if="running || progressMsg">
-        <template v-if="running">
+        <!-- Inline Cancel Confirmation -->
+        <div v-if="task.showCancelConfirm" class="msg msg-info task-cancel-dialog">
+          <template v-if="task.mode === 'livestream'">
+            <div style="font-size:11px;margin-bottom:8px">Keep segments and mux, or delete all?</div>
+            <div class="btn-row">
+              <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
+              <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
+              <button class="btn btn-ghost btn-xs" @click="task.showCancelConfirm = false">Back</button>
+            </div>
+          </template>
+          <template v-else>
+            <div style="font-size:11px;margin-bottom:8px">Cancel download? Partial files will be deleted.</div>
+            <div class="btn-row">
+              <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
+              <button class="btn btn-ghost btn-xs" @click="task.showCancelConfirm = false">No</button>
+            </div>
+          </template>
+        </div>
+
+        <!-- Task Progress -->
+        <div class="task-progress-area">
           <div class="progress-header">
             <div>
-              <div v-if="mode === 'livestream' || isLive" class="live-badge">
+              <div v-if="task.mode === 'livestream' || task.isLive" class="live-badge">
                 <div class="live-dot"></div>
-                <span v-if="isLive">Live — {{ segments }} segments captured</span>
-                <span v-else>Catching up — {{ segments }} segments</span>
+                <span v-if="task.isLive">Live — {{ task.segments }} segments</span>
+                <span v-else>Catching up — {{ task.segments }} segments</span>
               </div>
-              <div v-else class="progress-pct">{{ percent.toFixed(1) }}<span style="font-size:14px;font-weight:400;color:var(--muted)">%</span></div>
+              <div v-else class="progress-pct">{{ task.percent.toFixed(1) }}<span style="font-size:11px;opacity:0.6">%</span></div>
             </div>
             <div class="progress-meta">
-              <span v-if="speed && !isLive">{{ speed }}</span>
-              <span v-if="eta && !isLive">ETA {{ eta }}</span>
+              <span v-if="task.speed && !task.isLive">{{ task.speed }}</span>
+              <span v-if="task.eta && !task.isLive">{{ task.eta }}</span>
             </div>
           </div>
           <div class="progress-track">
             <div
               class="progress-fill"
-              :class="{ indeterminate: isLive }"
-              :style="{ width: isLive ? '' : percent + '%' }"
+              :class="{ indeterminate: task.mode === 'livestream' && !task.done }"
+              :style="{ width: (task.mode === 'livestream' && !task.done) ? '' : task.percent + '%' }"
             ></div>
           </div>
-        </template>
+        </div>
 
-        <div v-if="progressMsg" :class="['msg', `msg-${progressMsg.type}`]">
-          {{ progressMsg.text }}
+        <!-- Task Specific Messages -->
+        <div v-if="task.msg" :class="['msg', `msg-${task.msg.type}`]" style="margin-top:10px;padding:6px 10px;font-size:11px">
+          {{ task.msg.text }}
         </div>
       </div>
     </div>
@@ -180,102 +191,221 @@ const quality = ref('best')
 const reencodeAudio = ref(false)
 const poTokenConfigured = ref(false)
 
-const running = ref(false)
-const percent = ref(0)
-const speed = ref('')
-const eta = ref('')
-const segments = ref(0)
-const isLive = ref(false)
-const progressMsg = ref(null)
-const showCancelConfirm = ref(false)
-
-let currentJobId = null
-let eventSource = null
+const submitting = ref(false)
+const activeTasks = ref([])
 
 onMounted(async () => {
   try {
     const res = await axios.get('/api/settings')
     poTokenConfigured.value = !!res.data.potoken
+    
+    // Load existing running jobs
+    const jobsRes = await axios.get('/api/jobs')
+    const jobs = jobsRes.data
+    for (const [id, job] of Object.entries(jobs)) {
+      if (job.type === 'download' && job.status === 'running') {
+        addTaskFromJob(id, job)
+      }
+    }
   } catch (_) {}
 })
 
-const startDownload = async () => {
-  if (!url.value.trim()) return
+function addTaskFromJob(id, job) {
+  const task = {
+    id,
+    url: job.url || 'Unknown source',
+    mode: job.mode || 'video',
+    percent: 0,
+    speed: '',
+    eta: '',
+    isLive: false,
+    segments: 0,
+    msg: null,
+    showCancelConfirm: false,
+    eventSource: null,
+    done: false
+  }
+  activeTasks.value.push(task)
+  listenToJob(task)
+}
 
-  running.value = true
-  percent.value = 0
-  speed.value = ''
-  eta.value = ''
-  isLive.value = false
-  progressMsg.value = null
+const startDownload = async () => {
+  if (!url.value.trim() || activeTasks.value.length >= 5) return
+
+  submitting.value = true
+  const taskUrl = url.value
+  const taskMode = mode.value
 
   try {
     const form = new FormData()
-    form.append('url', url.value)
-    form.append('mode', mode.value)
+    form.append('url', taskUrl)
+    form.append('mode', taskMode)
     form.append('quality', quality.value)
     form.append('reencode_audio', reencodeAudio.value ? 'true' : 'false')
 
     const res = await axios.post('/api/download', form)
-    currentJobId = res.data.job_id
-
-    eventSource = new EventSource(`/api/download/progress/${currentJobId}`)
-
-    eventSource.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-
-      if (data.error) {
-        progressMsg.value = { type: 'error', text: data.error }
-        finish()
-        return
-      }
-      if (data.done) {
-        percent.value = 100
-        progressMsg.value = { type: 'success', text: 'Download complete!' }
-        finish()
-        return
-      }
-      if (data.mode === 'livestream') {
-        isLive.value = !!data.live
-        segments.value = data.segments || 0
-        return
-      }
-      if (data.percent !== undefined) {
-        percent.value = data.percent
-        speed.value = data.speed || ''
-        eta.value = data.eta || ''
-      }
+    const jobId = res.data.job_id
+    
+    const task = {
+      id: jobId,
+      url: taskUrl,
+      mode: taskMode,
+      percent: 0,
+      speed: '',
+      eta: '',
+      isLive: false,
+      segments: 0,
+      msg: null,
+      showCancelConfirm: false,
+      eventSource: null,
+      done: false
     }
-
-    eventSource.onerror = () => {
-      progressMsg.value = { type: 'error', text: 'Connection to server lost.' }
-      finish()
-    }
+    
+    activeTasks.value.push(task)
+    url.value = '' // Clear for next download
+    listenToJob(task)
   } catch (err) {
-    progressMsg.value = { type: 'error', text: err.response?.data?.detail ?? err.message }
-    running.value = false
+    // Show error in a temporary msg if submission fails
+    alert(err.response?.data?.detail ?? err.message)
+  } finally {
+    submitting.value = false
   }
 }
 
-const cancel = async (deleteTemp = false) => {
-  if (!currentJobId) return
-  showCancelConfirm.value = false
+function listenToJob(task) {
+  if (task.eventSource) task.eventSource.close()
+  
+  const es = new EventSource(`/api/download/progress/${task.id}`)
+  task.eventSource = es
+
+  es.onmessage = (e) => {
+    const data = JSON.parse(e.data)
+
+    if (data.error) {
+      task.msg = { type: 'error', text: data.error }
+      cleanupTask(task)
+      return
+    }
+    if (data.done) {
+      task.percent = 100
+      task.done = true
+      task.msg = { type: 'success', text: 'Download complete!' }
+      cleanupTask(task)
+      // Auto-hide after 3 seconds
+      setTimeout(() => {
+        removeTask(task.id)
+      }, 3000)
+      return
+    }
+    if (data.mode === 'livestream') {
+      task.isLive = !!data.live
+      task.segments = data.segments || 0
+      return
+    }
+    if (data.percent !== undefined) {
+      task.percent = data.percent
+      task.speed = data.speed || ''
+      task.eta = data.eta || ''
+    }
+  }
+
+  es.onerror = () => {
+    if (!task.done && !task.msg) {
+      task.msg = { type: 'error', text: 'Connection lost.' }
+      cleanupTask(task)
+    }
+  }
+}
+
+const cancelTask = async (task, deleteTemp = false) => {
+  task.showCancelConfirm = false
   try { 
     const form = new FormData()
     form.append('delete', deleteTemp.toString())
-    await axios.post(`/api/download/cancel/${currentJobId}`, form) 
+    await axios.post(`/api/download/cancel/${task.id}`, form)
+    if (deleteTemp) {
+      removeTask(task.id)
+    }
   } catch (_) {}
 }
 
-const finish = () => {
-  eventSource?.close()
-  eventSource = null
-  currentJobId = null
-  running.value = false
+function cleanupTask(task) {
+  task.eventSource?.close()
+  task.eventSource = null
+}
+
+function removeTask(id) {
+  const idx = activeTasks.value.findIndex(t => t.id === id)
+  if (idx !== -1) {
+    activeTasks.value[idx].eventSource?.close()
+    activeTasks.value.splice(idx, 1)
+  }
 }
 </script>
 
 <style scoped>
+.task-card {
+  margin-bottom: 8px;
+  padding: 12px 16px;
+  border-left: 2px solid var(--border);
+  transition: all 0.3s ease;
+}
+.task-card.task-done {
+  border-left-color: var(--green);
+  opacity: 0.8;
+}
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.task-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 80%;
+}
+.task-mode-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  font-weight: 700;
+}
+.task-url {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+}
+.task-progress-area {
+  margin-top: 8px;
+}
+.progress-pct {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+}
+.progress-meta {
+  font-size: 10px;
+  color: var(--muted);
+}
+.task-cancel-dialog {
+  margin: 10px 0;
+  padding: 8px 12px;
+}
+.btn-xs {
+  padding: 4px 8px;
+  font-size: 10px;
+}
+.btn-sm {
+  padding: 6px 10px;
+  font-size: 11px;
+}
 .spinner {
   display: inline-block;
   width: 11px;

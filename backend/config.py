@@ -17,6 +17,8 @@ DEFAULT_CONFIG = {
     "ytdlp_args": "",
     "ytarchive_args": "",
     "ffmpeg_args": "",
+    "video_format": "mp4",
+    "audio_format": "mp3",
 }
 
 

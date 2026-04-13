@@ -278,6 +278,17 @@ async def api_download(
     Path(dl_path).mkdir(parents=True, exist_ok=True)
     Path(out_path).mkdir(parents=True, exist_ok=True)
 
+    # Concurrency Limit Check (Max 5 active download jobs)
+    active_downloads = [
+        j for j in job_manager.get_all_jobs().values()
+        if j.get("type") == "download" and j.get("status") == "running"
+    ]
+    if len(active_downloads) >= 5:
+        raise HTTPException(
+            status_code=429, 
+            detail="Maximum concurrent downloads (5) reached. Please wait or cancel a download."
+        )
+
     job_id = str(uuid.uuid4())
     # Create a unique temp folder for this specific job to isolate its files
     job_temp_dir = Path(dl_path) / f"job_{job_id[:8]}"
@@ -345,7 +356,8 @@ async def api_download(
     job_manager.add_job(job_id, {
         "mode": mode, 
         "type": "download", 
-        "temp_dir": str(job_temp_dir)
+        "temp_dir": str(job_temp_dir),
+        "url": url
     }, process=process)
     return {"job_id": job_id}
 
@@ -374,7 +386,7 @@ async def api_download_progress(job_id: str):
                     continue
                 
                 # Output to console so it appears in docker logs
-                print(line, flush=True)
+                print(f"[job:{job_id[:8]}] {line}", flush=True)
 
                 event = None
 
@@ -505,6 +517,17 @@ async def api_ffmpeg_cut(
     cut_dir = Path(out_path) / "ffmpeg"
     cut_dir.mkdir(parents=True, exist_ok=True)
 
+    # Concurrency Limit Check (Max 1 active cut job)
+    active_cuts = [
+        j for j in job_manager.get_all_jobs().values()
+        if j.get("type") == "ffmpeg" and j.get("status") == "running"
+    ]
+    if len(active_cuts) >= 1:
+        raise HTTPException(
+            status_code=429, 
+            detail="Another cut is already in progress. Please wait for it to finish."
+        )
+
     if library_path:
         # library_path is "folder/filename"
         if "/" not in library_path:
@@ -560,31 +583,52 @@ async def api_ffmpeg_cut(
     input_suffix = Path(input_path).suffix.lower()
     is_audio_input = input_suffix in [".mp3", ".m4a", ".aac", ".opus", ".ogg", ".flac", ".wav", ".m4b"]
 
-    # Sanitize output name to prevent path traversal
-    safe_output_name = re.sub(r'[^a-zA-Z0-9_\-]', '', name)
+    # Sanitize output name: Replace spaces with underscores, then strip dangerous chars
+    safe_output_name = name.replace(" ", "_")
+    safe_output_name = re.sub(r'[^a-zA-Z0-9_\-]', '', safe_output_name)
+    
     if not safe_output_name:
         safe_output_name = f"clip_{uuid.uuid4().hex[:8]}"
     
-    # Hardcoded extensions based on input type
-    output_ext = ".mp3" if is_audio_input else ".mp4"
+    # Extensions from config
+    def_video = cfg.get("video_format", "mp4").strip(".")
+    def_audio = cfg.get("audio_format", "mp3").strip(".")
+    
+    output_ext = f".{def_audio}" if is_audio_input else f".{def_video}"
     output_file = f"{cut_dir}/{safe_output_name}{output_ext}"
     job_id = str(uuid.uuid4())
 
+    # Codec Selection
     if is_audio_input:
-        # Audio Logic: Force MP3 output
-        video_codec = ["-vn"]  # Remove video/cover art streams for clean MP3
-        if reencode_full == "true" or input_suffix != ".mp3":
-            audio_codec = ["libmp3lame", "-b:a", "320k"]
+        video_codec = ["-vn"]  # Strip video for audio outputs
+        
+        # Decide if we MUST re-encode (extensions differ) or if user WANTs to
+        must_reencode = input_suffix != output_ext
+        should_reencode = reencode_full == "true" or must_reencode
+        
+        if should_reencode:
+            if def_audio == "mp3":
+                audio_codec = ["libmp3lame", "-b:a", "320k"]
+            elif def_audio == "m4a":
+                audio_codec = ["aac", "-b:a", "192k"]
+            elif def_audio == "wav":
+                audio_codec = ["pcm_s16le"]
+            elif def_audio == "flac":
+                audio_codec = ["flac"]
+            elif def_audio == "opus":
+                audio_codec = ["libopus", "-b:a", "128k"]
+            else:
+                audio_codec = ["libmp3lame", "-b:a", "320k"] # Default fallback
         else:
             audio_codec = ["copy"]
     else:
-        # Video Logic: Force MP4 output
+        # Video Logic
         if reencode_full == "true":
-            # Full re-encode: libx264 for video, aac for audio
+            # Standard high-compatibility transcode
             video_codec = ["-c:v", "libx264", "-crf", "23", "-preset", "superfast"]
             audio_codec = ["-c:a", "aac", "-b:a", "192k"]
         else:
-            # Instant cut: just copy the streams
+            # Instant cut
             video_codec = ["-c:v", "copy"]
             audio_codec = ["-c:a", "copy"]
 
@@ -660,7 +704,7 @@ async def api_ffmpeg_progress(job_id: str):
                 
                 # Output to console so it appears in docker logs
                 if line:
-                    print(line, flush=True)
+                    print(f"[job:{job_id[:8]}] {line}", flush=True)
 
                 # ffmpeg -progress pipe:1 emits key=value lines
                 if line.startswith("out_time_us="):

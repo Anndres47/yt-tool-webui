@@ -6,7 +6,10 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 
 ## Features
 
-- **Download** YouTube videos, livestreams, and audio — powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [ytarchive](https://github.com/Kethsar/ytarchive)
+- **Multi-Download System** — download up to **5 concurrent** videos, livestreams, or audio files simultaneously.
+- **Task Cards** — each download is managed via an independent card showing real-time progress, speed, and ETA.
+- **Auto-Hide** — successful downloads automatically disappear from the list after 3 seconds to keep your UI clean.
+- **Concurrency Protection** — the UI proactively blocks new downloads and shows a disclaimer when the 5-job limit is reached.
 - **Quality selector** for video: Best, 1080p, 720p, 480p, 360p
 - **Audio mode** — download best audio stream, optionally re-encode to MP3 320kbps via ffmpeg
 - **Livestream support** — tracks catch-up progress, shows segment count, and pulses when live; Abort & Save automatically muxes segments using the `--merge` flag.
@@ -14,15 +17,18 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 - **FFmpeg Cutter** — trim any video or audio file.
   - **Instant Cut** — use stream copy (`-c:v copy`) for near-instant results with zero quality loss.
   - **Full Re-encode (Slow)** — optional transcoding to H.264/AAC for maximum compatibility across all devices.
+  - **Configurable Defaults** — set your preferred video (MP4, MKV, etc.) and audio (MP3, M4A, FLAC, etc.) formats in the Settings tab.
+  - **Smart Codec Selection** — the cutter automatically selects the best encoder if the source format differs from your configured default.
   - **Library picker** — select files from `outputs/` or `outputs/ffmpeg/`, streamed via HTTP range requests.
   - **Native video preview** — seek and set cut points from the playhead.
 - **Surgical Cleanup** — each download runs in a unique temp directory; cancelling a video download wipes only that specific job's leftovers.
+- **Filename Sanitization** — output names are automatically cleaned; spaces are replaced with underscores (`_`) for better filesystem compatibility.
 - **Settings panel** — configure Data, Download (temp), and Output paths directly from the UI.
 - **Advanced Settings** — pass custom CLI arguments to `yt-dlp`, `ytarchive`, and `ffmpeg` for specialized workflows.
 - **PO Token Validation** — built-in check for livestreams to prevent "Video details not found" errors with a direct link to the setup guide.
 - **Cancel Cut** — instantly stop slow re-encodes with automatic cleanup of unfinished files.
 - **Persistent UI State** — navigate between tabs without losing progress or input data thanks to Vue's `KeepAlive`.
-- **Command log** — every CLI command executed is timestamped and logged to `data/logs/commands.log`.
+- **Command log** — every CLI command executed is timestamped and logged to `data/logs/commands.log`. Progress is prefixed with the job ID in `docker logs` for easy debugging.
 
 ---
 
@@ -133,6 +139,8 @@ All settings are available in the **Settings** tab of the UI.
 | yt-dlp args | _(empty)_ | Additional CLI arguments for all `yt-dlp` commands. |
 | ytarchive args | _(empty)_ | Additional CLI arguments for all `ytarchive` commands. |
 | FFmpeg args | _(empty)_ | Additional CLI arguments for FFmpeg cut/re-encode. |
+| Video format | `mp4` | Default output extension for video cuts (MP4, MKV, MOV, WebM). |
+| Audio format | `mp3` | Default output extension for audio cuts (MP3, M4A, WAV, FLAC, Opus). |
 
 ### Using cookies
 
