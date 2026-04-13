@@ -95,7 +95,7 @@
           </div>
           <button 
             v-if="!task.done && !task.showCancelConfirm" 
-            class="btn btn-ghost btn-sm" 
+            :class="['btn btn-sm', task.mode === 'livestream' ? 'btn-danger' : 'btn-ghost']"
             @click="promptCancel(task)"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
