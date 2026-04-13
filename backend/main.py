@@ -38,6 +38,12 @@ QUALITY_MAP = {
 ONE_GB = 1 * 1024 * 1024 * 1024
 
 
+def _write_file(path: str, data: bytes):
+    """Synchronous file write, run in a thread to avoid blocking the event loop."""
+    with open(path, "wb") as f:
+        f.write(data)
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
@@ -171,7 +177,7 @@ async def api_download(
     job_id = str(uuid.uuid4())
 
     if mode == "livestream":
-        cmd = ["ytarchive", url, "best", "-o", f"{dl_path}/%(id)s"]
+        cmd = ["ytarchive", url, "best", "-o", f"{dl_path}/{{id}}"]
         if cookies:
             cmd += ["--cookies", cookies]
         if potoken:
@@ -319,9 +325,11 @@ async def api_ffmpeg_cut(
         contents = await video.read()
         if len(contents) > ONE_GB:
             raise HTTPException(status_code=413, detail="File exceeds 1 GB limit")
-        input_path = f"/tmp/{video.filename}"
-        with open(input_path, "wb") as f:
-            f.write(contents)
+        # Sanitize filename — strip any path components, use uuid to avoid collisions
+        safe_name = Path(video.filename).name if video.filename else "upload"
+        tmp_job = str(uuid.uuid4())
+        input_path = f"/tmp/{tmp_job}_{safe_name}"
+        await asyncio.to_thread(_write_file, input_path, contents)
     else:
         raise HTTPException(status_code=400, detail="No file provided")
 
@@ -361,6 +369,7 @@ async def api_ffmpeg_cut(
         "type": "ffmpeg",
         "duration_s": float(duration_s) if duration_s else 0,
         "output": output_path,
+        "tmp_input": input_path if not library_path else None,
     }
     return {"job_id": job_id}
 
@@ -406,6 +415,13 @@ async def api_ffmpeg_progress(job_id: str):
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
+            # Clean up uploaded temp file if any
+            tmp = job.get("tmp_input")
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
             jobs.pop(job_id, None)
 
     return StreamingResponse(

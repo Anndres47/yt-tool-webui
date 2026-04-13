@@ -1,0 +1,12 @@
+# Never send these into the Docker build context
+data/
+downloads/
+logs/
+config.json
+frontend/node_modules/
+__pycache__/
+backend/__pycache__/
+*.pyc
+*.pyo
+.env
+.DS_Store

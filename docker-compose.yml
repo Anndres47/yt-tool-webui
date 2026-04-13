@@ -5,5 +5,7 @@ services:
     ports:
       - "7860:7860"
     volumes:
-      - ./downloads:/app/downloads
+      - ./data:/app/downloads
+    environment:
+      - YTDL_DOWNLOAD_PATH=/app/downloads
     restart: unless-stopped

@@ -1,107 +1,168 @@
 <template>
   <div>
-    <!-- Source selector -->
-    <div class="card">
-      <h2>Source</h2>
-      <div class="inner-tabs">
-        <button :class="['inner-tab', { active: sourceTab === 'library' }]" @click="switchSource('library')">Library</button>
-        <button :class="['inner-tab', { active: sourceTab === 'upload' }]" @click="switchSource('upload')">Upload (max 1 GB)</button>
+    <div class="section-header">
+      <h1 class="section-title">Cutter</h1>
+      <span class="section-sub">ffmpeg · stream copy</span>
+    </div>
+
+    <!-- Source panel -->
+    <div class="panel">
+      <div class="panel-label">Source</div>
+
+      <div class="source-tabs">
+        <button :class="['source-tab', { active: sourceTab === 'library' }]" @click="switchSource('library')">Library</button>
+        <button :class="['source-tab', { active: sourceTab === 'upload' }]" @click="switchSource('upload')">Upload · max 1 GB</button>
       </div>
 
-      <!-- Library -->
+      <!-- Library picker -->
       <template v-if="sourceTab === 'library'">
         <div class="field">
-          <label>File from downloads folder</label>
+          <label class="field-label">File from downloads folder</label>
           <select v-model="libraryFile" @change="onLibrarySelect">
             <option value="">— select a file —</option>
             <option v-for="f in libraryFiles" :key="f.name" :value="f.name">
-              {{ f.name }} ({{ formatSize(f.size) }})
+              {{ f.name }}  ({{ formatSize(f.size) }})
             </option>
           </select>
         </div>
-        <button class="btn btn-secondary" style="margin-bottom:0.75rem" @click="loadLibrary">Refresh</button>
+        <button class="btn btn-ghost" style="font-size:11px;padding:6px 12px" @click="loadLibrary">
+          <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M10 5.5A4.5 4.5 0 1 1 5.5 1" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M10 1v4H6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Refresh
+        </button>
+        <div v-if="libraryFiles.length === 0" class="library-empty" style="margin-top:10px">
+          No files in downloads folder yet
+        </div>
       </template>
 
       <!-- Upload -->
       <template v-else>
-        <div class="field">
-          <label>Upload a video or audio file</label>
+        <div class="file-drop">
           <input type="file" accept="video/*,audio/*" @change="onFileUpload" />
+          <div class="file-drop-text">
+            <strong>Click to select a file</strong>
+            video or audio · max 1 GB
+          </div>
         </div>
       </template>
 
-      <!-- Preview -->
+      <!-- Media preview -->
       <template v-if="previewSrc">
-        <video
-          v-if="isVideoFile"
-          ref="mediaEl"
-          class="video-preview"
-          controls
-          :src="previewSrc"
-          @loadedmetadata="onMetadata"
-        ></video>
-        <audio
-          v-else
-          ref="mediaEl"
-          controls
-          style="width:100%;margin-bottom:0.75rem"
-          :src="previewSrc"
-          @loadedmetadata="onMetadata"
-        ></audio>
+        <div class="preview-wrap" style="margin-top:14px">
+          <video
+            v-if="isVideoFile"
+            ref="mediaEl"
+            controls
+            :src="previewSrc"
+            @loadedmetadata="onMetadata"
+          ></video>
+          <audio
+            v-else
+            ref="mediaEl"
+            controls
+            style="width:100%;padding:12px"
+            :src="previewSrc"
+            @loadedmetadata="onMetadata"
+          ></audio>
+        </div>
 
-        <!-- Start / End controls -->
-        <div class="time-row">
-          <div class="field">
-            <label>Start — {{ fmtTime(startTime) }}</label>
-            <input type="range" v-model.number="startTime" min="0" :max="duration" step="0.1"
-              @input="mediaEl && (mediaEl.currentTime = startTime)" />
-            <button class="btn btn-secondary" style="margin-top:0.3rem;font-size:0.78rem" @click="setFromCurrent('start')">
-              Set from current position
+        <!-- Scrubbers -->
+        <div class="scrubbers">
+          <div>
+            <div class="scrubber-label">
+              <span>Start</span>
+              <span class="scrubber-time">{{ fmtTime(startTime) }}</span>
+            </div>
+            <input
+              type="range"
+              v-model.number="startTime"
+              min="0"
+              :max="duration"
+              step="0.1"
+              @input="seekMedia(startTime)"
+            />
+            <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('start')">
+              Set from playhead
             </button>
           </div>
-          <div class="field">
-            <label>End — {{ fmtTime(endTime) }}</label>
-            <input type="range" v-model.number="endTime" min="0" :max="duration" step="0.1"
-              @input="mediaEl && (mediaEl.currentTime = endTime)" />
-            <button class="btn btn-secondary" style="margin-top:0.3rem;font-size:0.78rem" @click="setFromCurrent('end')">
-              Set from current position
+          <div>
+            <div class="scrubber-label">
+              <span>End</span>
+              <span class="scrubber-time">{{ fmtTime(endTime) }}</span>
+            </div>
+            <input
+              type="range"
+              v-model.number="endTime"
+              min="0"
+              :max="duration"
+              step="0.1"
+              @input="seekMedia(endTime)"
+            />
+            <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('end')">
+              Set from playhead
             </button>
           </div>
+        </div>
+
+        <!-- Duration callout -->
+        <div v-if="endTime > startTime" style="font-size:11px;color:var(--muted);margin-bottom:4px">
+          Clip duration: <span style="color:var(--accent)">{{ fmtTime(endTime - startTime) }}</span>
         </div>
       </template>
     </div>
 
-    <!-- Cut options -->
-    <div class="card">
-      <h2>Cut Options</h2>
+    <!-- Cut options panel -->
+    <div class="panel">
+      <div class="panel-label">Output</div>
 
       <div class="field">
-        <label>Output filename (without extension)</label>
+        <label class="field-label">Output filename <span style="color:var(--muted);font-weight:400">(without extension)</span></label>
         <input type="text" v-model="outputName" placeholder="my-clip" />
       </div>
 
-      <label class="check-row">
-        <input type="checkbox" v-model="reencodeAudio" />
-        Re-encode audio to MP3 320kbps
-      </label>
+      <div class="field">
+        <label
+          :class="['toggle-row', { checked: reencodeAudio }]"
+          @click="reencodeAudio = !reencodeAudio"
+        >
+          <div class="toggle-box">
+            <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+              <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          Re-encode audio to MP3 320kbps
+        </label>
+      </div>
 
       <div class="btn-row">
-        <button class="btn btn-primary" @click="cut" :disabled="cutting || !previewSrc || !outputName">
-          {{ cutting ? 'Cutting...' : 'Cut' }}
+        <button
+          class="btn btn-primary"
+          @click="cut"
+          :disabled="cutting || !previewSrc || !outputName.trim()"
+        >
+          <svg v-if="!cutting" width="13" height="13" viewBox="0 0 13 13" fill="none">
+            <circle cx="3" cy="3" r="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <circle cx="3" cy="10" r="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M4.5 3.5L12 9M4.5 9.5l2-1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          <span v-if="cutting" class="spinner"></span>
+          {{ cutting ? 'Cutting…' : 'Cut' }}
         </button>
       </div>
-    </div>
 
-    <!-- Progress -->
-    <div class="card" v-if="cutting || cutMsg">
-      <div class="progress-wrap" v-if="cutting">
-        <div class="progress-bar-track">
-          <div class="progress-bar-fill" :style="{ width: cutPercent + '%' }"></div>
+      <!-- Progress -->
+      <div class="progress-block" v-if="cutting || cutMsg">
+        <template v-if="cutting">
+          <div class="progress-header">
+            <div class="progress-pct">{{ cutPercent.toFixed(1) }}<span style="font-size:14px;font-weight:400;color:var(--muted)">%</span></div>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" :style="{ width: cutPercent + '%' }"></div>
+          </div>
+        </template>
+
+        <div v-if="cutMsg" :class="['msg', `msg-${cutMsg.type}`]">
+          {{ cutMsg.text }}
         </div>
-        <div class="progress-meta"><span>{{ cutPercent.toFixed(1) }}%</span></div>
-      </div>
-      <div v-if="cutMsg" :class="['msg', cutMsg.type === 'error' ? 'msg-error' : 'msg-success']">
-        {{ cutMsg.text }}
       </div>
     </div>
   </div>
@@ -174,7 +235,7 @@ function onFileUpload(event) {
   const file = event.target.files[0]
   if (!file) return
   if (file.size > 1 * 1024 * 1024 * 1024) {
-    cutMsg.value = { type: 'error', text: 'File exceeds the 1 GB upload limit. Use the Library instead.' }
+    cutMsg.value = { type: 'error', text: 'File exceeds the 1 GB upload limit. Select it from the Library instead.' }
     event.target.value = ''
     return
   }
@@ -191,6 +252,10 @@ function onMetadata() {
   endTime.value = duration.value
 }
 
+function seekMedia(t) {
+  if (mediaEl.value) mediaEl.value.currentTime = t
+}
+
 function setFromCurrent(which) {
   if (!mediaEl.value) return
   const t = mediaEl.value.currentTime
@@ -199,10 +264,11 @@ function setFromCurrent(which) {
 }
 
 function fmtTime(s) {
-  if (!isFinite(s)) return '0:00'
-  const m = Math.floor(s / 60)
+  if (!isFinite(s) || s < 0) return '0:00'
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
   const sec = Math.floor(s % 60).toString().padStart(2, '0')
-  return `${m}:${sec}`
+  return h > 0 ? `${h}:${m.toString().padStart(2,'0')}:${sec}` : `${m}:${sec}`
 }
 
 function formatSize(bytes) {
@@ -212,7 +278,7 @@ function formatSize(bytes) {
 }
 
 async function cut() {
-  if (!previewSrc.value || !outputName.value) return
+  if (!previewSrc.value || !outputName.value.trim()) return
   if (startTime.value >= endTime.value) {
     cutMsg.value = { type: 'error', text: 'Start time must be less than end time.' }
     return
@@ -252,7 +318,7 @@ async function cut() {
       }
       if (data.done) {
         cutPercent.value = 100
-        cutMsg.value = { type: 'success', text: `Done! Saved to: ${data.output}` }
+        cutMsg.value = { type: 'success', text: `Saved to: ${data.output}` }
         cutting.value = false
         es.close()
         loadLibrary()
@@ -271,3 +337,16 @@ async function cut() {
   }
 }
 </script>
+
+<style scoped>
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid rgba(0,0,0,0.3);
+  border-top-color: #0a0a0b;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
