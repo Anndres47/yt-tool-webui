@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Dict
 
 class JobManager:
-    def __init__(self, download_path: str):
-        self.path = Path(download_path) if download_path else Path("/app/downloads")
+    def __init__(self, data_path: str):
+        self.path = Path(data_path) if data_path else Path("/app/data")
         self.jobs_file = self.path / "jobs.json"
         self.jobs: Dict[str, dict] = {}  # All metadata
         self.processes: Dict[str, any] = {}  # Active subprocesses

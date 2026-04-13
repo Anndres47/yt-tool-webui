@@ -17,11 +17,11 @@
       <!-- Library picker -->
       <template v-if="sourceTab === 'library'">
         <div class="field">
-          <label class="field-label">File from downloads folder</label>
+          <label class="field-label">File from library</label>
           <select v-model="libraryFile" @change="onLibrarySelect">
             <option value="">— select a file —</option>
-            <option v-for="f in libraryFiles" :key="f.name" :value="f.name">
-              {{ f.name }}  ({{ formatSize(f.size) }})
+            <option v-for="f in libraryFiles" :key="f.path" :value="f.path">
+              [{{ f.folder }}] {{ f.name }}  ({{ formatSize(f.size) }})
             </option>
           </select>
         </div>
@@ -30,7 +30,7 @@
           Refresh
         </button>
         <div v-if="libraryFiles.length === 0" class="library-empty" style="margin-top:10px">
-          No files in downloads folder yet
+          No files in library yet
         </div>
       </template>
 
@@ -228,7 +228,8 @@ function clearPreview() {
 function onLibrarySelect() {
   if (!libraryFile.value) { clearPreview(); return }
   if (previewObjectUrl.value) { URL.revokeObjectURL(previewObjectUrl.value); previewObjectUrl.value = '' }
-  previewSrc.value = `/api/library/stream/${encodeURIComponent(libraryFile.value)}`
+  // libraryFile is "folder/filename"
+  previewSrc.value = `/api/library/stream/${libraryFile.value}`
 }
 
 function onFileUpload(event) {

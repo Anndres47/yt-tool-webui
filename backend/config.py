@@ -4,19 +4,23 @@ from pathlib import Path
 
 # Config file lives alongside downloads so it's always on a persisted volume.
 # Falls back to next to main.py for local dev.
+_DATA_PATH_FROM_ENV = os.environ.get("YTDL_DATA_PATH", "")
 _DOWNLOAD_PATH_FROM_ENV = os.environ.get("YTDL_DOWNLOAD_PATH", "")
+_OUTPUT_PATH_FROM_ENV = os.environ.get("YTDL_OUTPUT_PATH", "")
 
 DEFAULT_CONFIG = {
+    "data_path": _DATA_PATH_FROM_ENV or "/app/data",
     "download_path": _DOWNLOAD_PATH_FROM_ENV or "/app/downloads",
+    "output_path": _OUTPUT_PATH_FROM_ENV or "/app/outputs",
     "cookies_path": "",
     "potoken": "",
 }
 
 
 def _config_path() -> Path:
-    """Config file is stored in the download directory so it survives restarts."""
-    dl = _DOWNLOAD_PATH_FROM_ENV or DEFAULT_CONFIG["download_path"]
-    p = Path(dl)
+    """Config file is stored in the data directory so it survives restarts."""
+    data_dir = _DATA_PATH_FROM_ENV or DEFAULT_CONFIG["data_path"]
+    p = Path(data_dir)
     if p.exists():
         return p / "config.json"
     # Fallback for local dev (no volume mounted)

@@ -4,16 +4,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from config import get_config
 
-_LOGS_PATH_FROM_ENV = os.environ.get("YTDL_DOWNLOAD_PATH", "")
+_DATA_PATH_FROM_ENV = os.environ.get("YTDL_DATA_PATH", "")
 
 
 def log_command(job_id: str, cmd: list[str]):
-    # Logs live next to the downloads folder so they're on the same volume.
-    if _LOGS_PATH_FROM_ENV:
-        log_dir = Path(_LOGS_PATH_FROM_ENV) / "logs"
+    # Logs live in the data folder.
+    if _DATA_PATH_FROM_ENV:
+        log_dir = Path(_DATA_PATH_FROM_ENV) / "logs"
     else:
-        download_path = Path(get_config()["download_path"])
-        log_dir = download_path / "logs"
+        data_path = Path(get_config()["data_path"])
+        log_dir = data_path / "logs"
 
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "commands.log"

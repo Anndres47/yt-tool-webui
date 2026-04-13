@@ -9,8 +9,18 @@
       <div class="panel-label">Paths</div>
 
       <div class="field">
-        <label class="field-label">Download path <span style="color:var(--muted);font-weight:400">(absolute, server-side)</span></label>
+        <label class="field-label">Data path <span style="color:var(--muted);font-weight:400">(configs, jobs, logs)</span></label>
+        <input type="text" v-model="cfg.data_path" placeholder="/app/data" />
+      </div>
+
+      <div class="field">
+        <label class="field-label">Download path <span style="color:var(--muted);font-weight:400">(temporary files)</span></label>
         <input type="text" v-model="cfg.download_path" placeholder="/app/downloads" />
+      </div>
+
+      <div class="field">
+        <label class="field-label">Output path <span style="color:var(--muted);font-weight:400">(finished files)</span></label>
+        <input type="text" v-model="cfg.output_path" placeholder="/app/outputs" />
       </div>
 
       <div class="field">
@@ -64,7 +74,7 @@
 import { ref, onMounted } from 'vue'
 import axios from 'axios'
 
-const cfg = ref({ download_path: '', cookies_path: '', potoken: '' })
+const cfg = ref({ data_path: '', download_path: '', output_path: '', cookies_path: '', potoken: '' })
 const saving = ref(false)
 const clearing = ref(false)
 const msg = ref(null)

@@ -26,7 +26,7 @@ app.add_middleware(
 )
 
 # Initialize job manager
-job_manager = JobManager(get_config()["download_path"])
+job_manager = JobManager(get_config()["data_path"])
 job_manager.cleanup_on_startup()
 
 
@@ -60,11 +60,19 @@ def api_get_settings():
 async def api_save_settings(request: Request):
     data = await request.json()
     save_config(data)
-    # Re-create downloads dir if path changed
-    dl = data.get("download_path", "/app/downloads")
-    Path(dl).mkdir(parents=True, exist_ok=True)
+    # Re-create directories if paths changed
+    for key in ["data_path", "download_path", "output_path"]:
+        p = data.get(key)
+        if p:
+            Path(p).mkdir(parents=True, exist_ok=True)
+    
+    # Ensure ffmpeg output dir exists
+    output_dir = data.get("output_path", "/app/outputs")
+    Path(output_dir, "ffmpeg").mkdir(parents=True, exist_ok=True)
+
     # Update job manager path
-    job_manager.path = Path(dl)
+    data_dir = data.get("data_path", "/app/data")
+    job_manager.path = Path(data_dir)
     job_manager.jobs_file = job_manager.path / "jobs.json"
     job_manager.load()
     return {"status": "saved"}
@@ -91,6 +99,7 @@ async def api_finalize_job(job_id: str):
         raise HTTPException(status_code=400, detail="Invalid job for finalization")
 
     dl_path = get_config()["download_path"]
+    out_path = get_config()["output_path"]
     # ytarchive typically uses {id}.f*.ts or similar.
     # We look for .ts files in the download directory.
     # This is a bit heuristic but helpful for recovery.
@@ -98,7 +107,7 @@ async def api_finalize_job(job_id: str):
     if not ts_files:
         raise HTTPException(status_code=404, detail="No segments found to finalize")
 
-    output_path = f"{dl_path}/recovered_{job_id[:8]}.mp4"
+    output_file = f"{out_path}/recovered_{job_id[:8]}.mp4"
 
     # Create a concat file for ffmpeg
     concat_file = Path(dl_path) / f"concat_{job_id}.txt"
@@ -110,7 +119,7 @@ async def api_finalize_job(job_id: str):
 
     cmd = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-        "-i", str(concat_file), "-c", "copy", output_path
+        "-i", str(concat_file), "-c", "copy", output_file
     ]
 
     log_command(job_id, cmd)
@@ -134,28 +143,54 @@ async def api_finalize_job(job_id: str):
 
 @app.get("/api/library")
 def api_library():
-    dl = Path(get_config()["download_path"])
-    if not dl.exists():
-        return []
+    cfg = get_config()
+    out_dir = Path(cfg["output_path"])
+    dl_dir = Path(cfg["download_path"])
+    
     files = []
-    for p in sorted(dl.iterdir()):
-        if p.is_file():
-            stat = p.stat()
-            files.append({
-                "name": p.name,
-                "size": stat.st_size,
-                "modified": stat.st_mtime,
-            })
+    
+    def scan_dir(base_path: Path, folder_label: str):
+        if not base_path.exists():
+            return
+        for p in sorted(base_path.iterdir()):
+            if p.is_file():
+                stat = p.stat()
+                # Relative path from the root of outputs or downloads
+                # For streaming, we'll need to know which base it's in.
+                files.append({
+                    "name": p.name,
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "folder": folder_label,
+                    "path": f"{folder_label}/{p.name}"
+                })
+
+    scan_dir(out_dir, "outputs")
+    scan_dir(out_dir / "ffmpeg", "outputs/ffmpeg")
+    scan_dir(dl_dir, "downloads")
+    
     return files
 
 
-@app.get("/api/library/stream/{filename}")
-async def api_library_stream(filename: str, request: Request):
-    dl = Path(get_config()["download_path"])
-    file_path = (dl / filename).resolve()
+@app.get("/api/library/stream/{folder:path}/{filename}")
+async def api_library_stream(folder: str, filename: str, request: Request):
+    cfg = get_config()
+    
+    # Map label to actual path
+    base_map = {
+        "outputs": Path(cfg["output_path"]),
+        "outputs/ffmpeg": Path(cfg["output_path"]) / "ffmpeg",
+        "downloads": Path(cfg["download_path"]),
+    }
+    
+    base_path = base_map.get(folder)
+    if not base_path:
+        raise HTTPException(status_code=404, detail="Folder not found")
+        
+    file_path = (base_path / filename).resolve()
 
-    # Security: ensure resolved path is inside download dir
-    if not str(file_path).startswith(str(dl.resolve())):
+    # Security: ensure resolved path is inside the mapped base directory
+    if not str(file_path).startswith(str(base_path.resolve())):
         raise HTTPException(status_code=403, detail="Forbidden")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -235,21 +270,26 @@ async def api_download(
 ):
     cfg = get_config()
     dl_path = cfg["download_path"]
+    out_path = cfg["output_path"]
     cookies = cfg.get("cookies_path", "")
     potoken = cfg.get("potoken", "")
     Path(dl_path).mkdir(parents=True, exist_ok=True)
+    Path(out_path).mkdir(parents=True, exist_ok=True)
 
     job_id = str(uuid.uuid4())
 
     if mode == "livestream":
-        cmd = ["ytarchive", url, "best", "-o", f"{dl_path}/{{id}}"]
+        # -td is temporary dir, -o is final output
+        cmd = ["ytarchive", "-td", dl_path, url, "best", "-o", f"{out_path}/{{id}}"]
         if cookies:
             cmd += ["--cookies", cookies]
         if potoken:
             cmd += ["--potoken", potoken]
     elif mode == "audio":
+        # --paths temp: is working dir, --paths home: is final dir
         cmd = ["yt-dlp", url, "-f", "bestaudio",
-               "-o", f"{dl_path}/%(title)s.%(ext)s"]
+               "--paths", f"temp:{dl_path}", "--paths", f"home:{out_path}",
+               "-o", "%(title)s.%(ext)s"]
         if reencode_audio == "true":
             cmd += ["-x", "--audio-format", "mp3",
                     "--postprocessor-args", "ffmpeg:-b:a 320k"]
@@ -260,7 +300,8 @@ async def api_download(
     else:  # video
         fmt = QUALITY_MAP.get(quality, QUALITY_MAP["best"])
         cmd = ["yt-dlp", url, "-f", fmt,
-               "-o", f"{dl_path}/%(title)s.%(ext)s"]
+               "--paths", f"temp:{dl_path}", "--paths", f"home:{out_path}",
+               "-o", "%(title)s.%(ext)s"]
         if cookies:
             cmd += ["--cookies", cookies]
         if potoken:
@@ -402,12 +443,32 @@ async def api_ffmpeg_cut(
     video: Optional[UploadFile] = None,
 ):
     cfg = get_config()
+    out_path = cfg["output_path"]
     dl_path = cfg["download_path"]
-    Path(dl_path).mkdir(parents=True, exist_ok=True)
+    
+    # Ensure cut dir exists
+    cut_dir = Path(out_path) / "ffmpeg"
+    cut_dir.mkdir(parents=True, exist_ok=True)
 
     if library_path:
-        resolved = (Path(dl_path) / library_path).resolve()
-        if not str(resolved).startswith(str(Path(dl_path).resolve())):
+        # library_path is "folder/filename"
+        if "/" not in library_path:
+             raise HTTPException(status_code=400, detail="Invalid library path")
+             
+        folder_label, filename = library_path.split("/", 1)
+        
+        base_map = {
+            "outputs": Path(out_path),
+            "outputs/ffmpeg": Path(out_path) / "ffmpeg",
+            "downloads": Path(dl_path),
+        }
+        
+        base_path = base_map.get(folder_label)
+        if not base_path:
+             raise HTTPException(status_code=400, detail="Invalid folder in library path")
+             
+        resolved = (base_path / filename).resolve()
+        if not str(resolved).startswith(str(base_path.resolve())):
             raise HTTPException(status_code=403, detail="Forbidden")
         if not resolved.exists():
             raise HTTPException(status_code=404, detail="File not found")
@@ -444,7 +505,7 @@ async def api_ffmpeg_cut(
     safe_output_name = re.sub(r'[^a-zA-Z0-9_\-]', '', name)
     if not safe_output_name:
         safe_output_name = f"clip_{uuid.uuid4().hex[:8]}"
-    output_path = f"{dl_path}/{safe_output_name}.mp4"
+    output_file = f"{cut_dir}/{safe_output_name}.mp4"
     job_id = str(uuid.uuid4())
 
     audio_codec = ["libmp3lame", "-b:a", "320k"] if reencode_audio == "true" else ["copy"]
@@ -465,7 +526,7 @@ async def api_ffmpeg_cut(
         "-c:a", *audio_codec,
         "-progress", "pipe:1",
         "-nostats",
-        output_path,
+        output_file,
     ]
 
     log_command(job_id, cmd)
@@ -478,7 +539,7 @@ async def api_ffmpeg_cut(
     job_manager.add_job(job_id, {
         "type": "ffmpeg",
         "duration_s": float(duration_s) if duration_s else 0,
-        "output": output_path,
+        "output": output_file,
         "tmp_input": input_path if not library_path else None,
     }, process=process)
     return {"job_id": job_id}
@@ -557,5 +618,11 @@ if os.path.isdir(frontend_dir):
 if __name__ == "__main__":
     import uvicorn
     cfg = get_config()
-    Path(cfg["download_path"]).mkdir(parents=True, exist_ok=True)
+    # Ensure all configured directories exist on startup
+    for key in ["data_path", "download_path", "output_path"]:
+        Path(cfg[key]).mkdir(parents=True, exist_ok=True)
+    
+    # Ensure ffmpeg subfolder exists
+    Path(cfg["output_path"], "ffmpeg").mkdir(parents=True, exist_ok=True)
+    
     uvicorn.run(app, host="0.0.0.0", port=8047)

@@ -5,7 +5,11 @@ services:
     ports:
       - "8047:8047"
     volumes:
-      - ./data:/app/downloads
+      - ./data:/app/data
+      - ./downloads:/app/downloads
+      - ./outputs:/app/outputs
     environment:
+      - YTDL_DATA_PATH=/app/data
       - YTDL_DOWNLOAD_PATH=/app/downloads
+      - YTDL_OUTPUT_PATH=/app/outputs
     restart: unless-stopped
