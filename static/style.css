@@ -1,0 +1,21 @@
+body {
+  background: #111;
+  color: #eee;
+  font-family: sans-serif;
+}
+.container {
+  width: 60%;
+  margin: auto;
+  padding: 20px;
+}
+input, select, button {
+  display: block;
+  margin: 10px 0;
+  padding: 8px;
+  width: 100%;
+}
+button {
+  background: #333;
+  color: white;
+  border: none;
+}
