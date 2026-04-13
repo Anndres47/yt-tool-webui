@@ -101,7 +101,7 @@
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
               <rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
             </svg>
-            Cancel
+            {{ task.mode === 'livestream' ? 'Abort' : 'Cancel' }}
           </button>
         </div>
 

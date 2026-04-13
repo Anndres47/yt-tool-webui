@@ -40,9 +40,17 @@ async def get_auto_potoken() -> tuple[str, str]:
                         req.add_header('Content-Type', 'application/json')
                     
                     with urllib.request.urlopen(req, timeout=15) as response:
-                        res_data = json.loads(response.read())
+                        raw_data = response.read()
+                        res_data = json.loads(raw_data)
+                        print(f"[PO Token] Raw Response from {strategy['path']}: {raw_data.decode()}", flush=True)
+                        
                         token = res_data.get("po_token") or res_data.get("poToken") or res_data.get("token") or ""
-                        visitor_id = res_data.get("visit_identifier") or res_data.get("visitorData") or ""
+                        visitor_id = (
+                            res_data.get("visit_identifier") or 
+                            res_data.get("visitorData") or 
+                            res_data.get("visitor_data") or 
+                            res_data.get("visitor_id") or ""
+                        )
                         
                         if token:
                             return token, visitor_id
