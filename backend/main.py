@@ -112,7 +112,6 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
     """Single reader task that broadcasts subprocess output to all subscribers."""
     buffer = ""
     stalled_seconds = 0
-    last_broadcast_time = 0
     
     try:
         while process.returncode is None:
@@ -127,40 +126,34 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                 lines = re.split(r"[\r\n]+", buffer)
                 buffer = lines.pop() if lines else ""
                 
+                latest_event_data = None
+                
                 for line in lines:
                     line = line.strip()
                     if not line: continue
                     
                     print(f"[job:{job_id[:8]}] {line}", flush=True)
                     
-                    now = time.time()
-                    # THROTTLE: Only process/broadcast progress at most once per second
-                    should_broadcast = (now - last_broadcast_time) >= 1.0
-                    
-                    event_data = None
                     if mode == "livestream":
                         seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
                         if seg_match:
-                            if should_broadcast:
-                                all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
-                                segments = sum(int(n) for n in all_nums)
-                                is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
-                                job_manager.update_job(job_id, {"segments": segments, "is_live": is_live}, save_to_disk=False)
-                                event_data = {"live": is_live, "segments": segments, "mode": "livestream"}
-                                last_broadcast_time = now
+                            all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
+                            segments = sum(int(n) for n in all_nums)
+                            is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
+                            job_manager.update_job(job_id, {"segments": segments, "is_live": is_live}, save_to_disk=False)
+                            latest_event_data = {"live": is_live, "segments": segments, "mode": "livestream"}
                     else:
                         dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+[\d.]+\S+\s+at\s+([~\d.]+\S+)\s+ETA\s+([~\d:]+)", line)
                         if dl_match:
-                            if should_broadcast:
-                                percent = float(dl_match.group(1))
-                                job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
-                                event_data = {"percent": percent, "speed": dl_match.group(2).replace("~", ""), "eta": dl_match.group(3).replace("~", "")}
-                                last_broadcast_time = now
+                            percent = float(dl_match.group(1))
+                            job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
+                            latest_event_data = {"percent": percent, "speed": dl_match.group(2).replace("~", ""), "eta": dl_match.group(3).replace("~", "")}
 
-                    if event_data and job_id in subscribers:
-                        msg = f"data: {json.dumps(event_data)}\n\n"
-                        for q in subscribers[job_id]:
-                            await q.put(msg)
+                if latest_event_data and job_id in subscribers:
+                    msg = f"data: {json.dumps(latest_event_data)}\n\n"
+                    for q in subscribers[job_id]:
+                        await q.put(msg)
+                    await asyncio.sleep(0.1)
 
             except asyncio.TimeoutError:
                 stalled_seconds += 15
