@@ -101,7 +101,7 @@
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
               <rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
             </svg>
-            {{ task.mode === 'livestream' ? 'Abort' : 'Cancel' }}
+            Cancel
           </button>
         </div>
 
@@ -109,7 +109,7 @@
         <div v-if="task.showCancelConfirm" class="msg msg-info task-cancel-dialog">
           <template v-if="task.mode === 'livestream'">
             <div class="cancel-row">
-              <span class="cancel-text">Abort &amp; Save?</span>
+              <span class="cancel-text">Keep &amp; Mux or Delete All?</span>
               <div class="btn-row-right">
                 <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
                 <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
@@ -119,7 +119,7 @@
           </template>
           <template v-else>
             <div class="cancel-row">
-              <span class="cancel-text">Cancel download?</span>
+              <span class="cancel-text">Are you sure you want to cancel?</span>
               <div class="btn-row-right">
                 <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
                 <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">No</button>
