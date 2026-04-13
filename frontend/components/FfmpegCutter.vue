@@ -213,7 +213,23 @@ const isVideoFile = computed(() => {
   return !AUDIO_EXT.has(ext)
 })
 
-onMounted(loadLibrary)
+onMounted(async () => {
+  loadLibrary()
+  try {
+    const res = await axios.get('/api/jobs')
+    const jobs = res.data
+    for (const [id, job] of Object.entries(jobs)) {
+      if (job.type === 'ffmpeg' && job.status === 'running') {
+        activeJobId = id
+        cutting.value = true
+        cutPercent.value = job.percent || 0
+        outputName.value = job.name || ''
+        listenToCut(id)
+        break
+      }
+    }
+  } catch (_) {}
+})
 
 async function loadLibrary() {
   try {
@@ -341,39 +357,42 @@ async function cut() {
     const res = await axios.post('/api/ffmpeg/cut', form)
     const jobId = res.data.job_id
     activeJobId = jobId
-
-    eventSource = new EventSource(`/api/ffmpeg/progress/${jobId}`)
-    eventSource.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-      if (data.error) {
-        cutMsg.value = { type: 'error', text: data.error }
-        cutting.value = false
-        eventSource?.close()
-        eventSource = null
-        return
-      }
-      if (data.done) {
-        cutPercent.value = 100
-        cutMsg.value = { type: 'success', text: `Saved to: ${data.output}` }
-        cutting.value = false
-        eventSource?.close()
-        eventSource = null
-        loadLibrary()
-        return
-      }
-      if (data.percent !== undefined) cutPercent.value = data.percent
-    }
-    eventSource.onerror = () => {
-      if (cutting.value) {
-        cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
-        cutting.value = false
-        eventSource?.close()
-        eventSource = null
-      }
-    }
+    listenToCut(jobId)
   } catch (err) {
     cutMsg.value = { type: 'error', text: err.response?.data?.detail ?? err.message }
     cutting.value = false
+  }
+}
+
+function listenToCut(jobId) {
+  eventSource = new EventSource(`/api/ffmpeg/progress/${jobId}`)
+  eventSource.onmessage = (e) => {
+    const data = JSON.parse(e.data)
+    if (data.error) {
+      cutMsg.value = { type: 'error', text: data.error }
+      cutting.value = false
+      eventSource?.close()
+      eventSource = null
+      return
+    }
+    if (data.done) {
+      cutPercent.value = 100
+      cutMsg.value = { type: 'success', text: `Saved to: ${data.output}` }
+      cutting.value = false
+      eventSource?.close()
+      eventSource = null
+      loadLibrary()
+      return
+    }
+    if (data.percent !== undefined) cutPercent.value = data.percent
+  }
+  eventSource.onerror = () => {
+    if (cutting.value) {
+      cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
+      cutting.value = false
+      eventSource?.close()
+      eventSource = null
+    }
   }
 }
 </script>

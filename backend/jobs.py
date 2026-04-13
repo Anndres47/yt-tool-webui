@@ -48,11 +48,12 @@ class JobManager:
             self.jobs[job_id]["status"] = self.jobs[job_id].get("status", "pending")
         self.save()
 
-    def update_job(self, job_id: str, updates: dict):
-        """Update job metadata."""
+    def update_job(self, job_id: str, updates: dict, save_to_disk: bool = True):
+        """Update job metadata. Skip disk write if save_to_disk is False."""
         if job_id in self.jobs:
             self.jobs[job_id].update(updates)
-            self.save()
+            if save_to_disk:
+                self.save()
 
     def get_job(self, job_id: str):
         """Get job metadata, attaching the live process object if active."""
@@ -70,23 +71,21 @@ class JobManager:
         self.save()
 
     def cleanup_on_startup(self):
-        """Identify 'running' jobs whose processes are gone and mark them as interrupted."""
+        """Identify 'running' jobs whose processes are gone and return livestreams for recovery."""
         changed = False
+        to_recover = []
         for job_id, job in self.jobs.items():
             if job.get("status") == "running":
-                pid = job.get("pid")
-                if pid:
-                    try:
-                        # signal 0 is a safe way to check if a process is still alive
-                        os.kill(pid, 0)
-                    except (ProcessLookupError, PermissionError):
-                        job["status"] = "interrupted"
-                        changed = True
-                else:
-                    job["status"] = "interrupted"
-                    changed = True
+                # On startup, all previously 'running' jobs are considered interrupted
+                if job.get("mode") == "livestream":
+                    to_recover.append(job_id)
+                
+                job["status"] = "interrupted"
+                job["pid"] = None
+                changed = True
         if changed:
             self.save()
+        return to_recover
 
     def get_all_jobs(self):
         """Return all tracked jobs."""

@@ -78,11 +78,19 @@ async def check_pot_connectivity():
         print("\033[93m[System] WARNING: PO Token Provider is unreachable. Auto-token may fail.\033[0m", flush=True)
 
 
+# Periodic state saver to prevent data loss without thrashing the disk
+async def checkpoint_saver():
+    while True:
+        await asyncio.sleep(60)
+        job_manager.save()
+
+
 app = FastAPI()
 
 @app.on_event("startup")
 async def on_startup():
     asyncio.create_task(check_pot_connectivity())
+    asyncio.create_task(checkpoint_saver())
 
 app.add_middleware(
     CORSMiddleware,
@@ -572,6 +580,13 @@ async def api_download_progress(job_id: str):
                                 
                                 # Check if live: ytarchive prints "at the live edge" or similar
                                 is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
+                                
+                                # PERSIST progress so it survives refreshes (Memory only)
+                                job_manager.update_job(job_id, {
+                                    "segments": segments,
+                                    "is_live": is_live
+                                }, save_to_disk=False)
+
                                 event = json.dumps({
                                     "live": is_live, 
                                     "segments": segments,
@@ -847,6 +862,9 @@ async def api_ffmpeg_cut(
         "type": "ffmpeg",
         "duration_s": float(duration_s) if duration_s else 0,
         "output": output_file,
+        "name": name,
+        "start": start,
+        "end": end,
         "tmp_input": input_path if not library_path else None,
         "status": "running"
     }, process=process)
@@ -892,6 +910,10 @@ async def api_ffmpeg_progress(job_id: str):
                             percent = min(100.0, out_us / (duration_s * 1_000_000) * 100)
                         else:
                             percent = 0
+                        
+                        # Store progress in memory for refresh recovery
+                        job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
+                        
                         yield f"data: {json.dumps({'percent': round(percent, 1)})}\n\n"
                     except ValueError:
                         pass
