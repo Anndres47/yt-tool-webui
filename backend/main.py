@@ -45,12 +45,21 @@ async def get_auto_potoken() -> tuple[str, str]:
                         print(f"[PO Token] Raw Response from {strategy['path']}: {raw_data.decode()}", flush=True)
                         
                         token = res_data.get("po_token") or res_data.get("poToken") or res_data.get("token") or ""
-                        visitor_id = (
+                        # Check multiple common keys for the visitor id
+                        v_id_raw = (
                             res_data.get("visit_identifier") or 
                             res_data.get("visitorData") or 
                             res_data.get("visitor_data") or 
+                            res_data.get("contentBinding") or
                             res_data.get("visitor_id") or ""
                         )
+                        
+                        # URL Decode if present (e.g. %3D%3D -> ==)
+                        if v_id_raw:
+                            from urllib.parse import unquote
+                            visitor_id = unquote(v_id_raw)
+                        else:
+                            visitor_id = ""
                         
                         if token:
                             return token, visitor_id
