@@ -371,7 +371,7 @@ async def api_download(
             token_arg = f"po_token=web+{potoken}"
             if visitor_id:
                 token_arg += f";visitor_data={visitor_id}"
-            cmd += ["--extractor-args", f"youtube:player_client=web;{token_arg}"]
+            cmd += ["--extractor-args", f"youtube:player-client=web,ios;{token_arg}"]
         
         # Append advanced arguments
         if cfg.get("ytdlp_args"):
@@ -390,12 +390,14 @@ async def api_download(
             token_arg = f"po_token=web+{potoken}"
             if visitor_id:
                 token_arg += f";visitor_data={visitor_id}"
-            cmd += ["--extractor-args", f"youtube:player_client=web;{token_arg}"]
+            cmd += ["--extractor-args", f"youtube:player-client=web,ios;{token_arg}"]
         
         # Append advanced arguments
         if cfg.get("ytdlp_args"):
             cmd.extend(shlex.split(cfg["ytdlp_args"]))
 
+    # Log full command to console for debugging
+    print(f"[job:{job_id[:8]}] EXECUTING: {shlex.join(cmd)}", flush=True)
     log_command(job_id, cmd)
 
     process = await asyncio.create_subprocess_exec(
@@ -427,17 +429,23 @@ async def api_download_progress(job_id: str):
              return
 
         try:
+            stalled_seconds = 0
             while True:
                 try:
-                    # Watchdog: If no output for 120s, assume it's stalled/blocked
-                    line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=120.0)
+                    # Inner timeout: send heartbeats every 15s to keep SSE alive
+                    line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=15.0)
+                    stalled_seconds = 0 # Reset watchdog on any output
                 except asyncio.TimeoutError:
-                    print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 120s. Terminating.\033[0m", flush=True)
-                    process.terminate()
-                    # Mark for cleanup
-                    job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True})
-                    yield f"data: {json.dumps({'error': 'Download stalled for 120s (Possible YouTube Bot Block). Job terminated.'})}\n\n"
-                    return
+                    stalled_seconds += 15
+                    if stalled_seconds >= 120:
+                        print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 120s. Terminating.\033[0m", flush=True)
+                        process.terminate()
+                        job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True})
+                        yield f"data: {json.dumps({'error': 'Download stalled for 120s (Possible YouTube Bot Block). Job terminated.'})}\n\n"
+                        return
+                    
+                    yield ": ping\n\n"
+                    continue
 
                 if not line_bytes:
                     break

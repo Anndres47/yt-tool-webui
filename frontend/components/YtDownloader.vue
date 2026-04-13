@@ -108,7 +108,7 @@
         <!-- Inline Cancel Confirmation -->
         <div v-if="task.showCancelConfirm" class="msg msg-info task-cancel-dialog">
           <template v-if="task.mode === 'livestream'">
-            <div style="font-size:11px;margin-bottom:8px">Keep segments and mux, or delete all? <span style="opacity:0.6">(Auto-dismiss in 10s)</span></div>
+            <div style="font-size:11px;margin-bottom:8px">Keep segments and mux, or delete all?</div>
             <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
               <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
               <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
@@ -116,7 +116,7 @@
             </div>
           </template>
           <template v-else>
-            <div style="font-size:11px;margin-bottom:8px">Cancel download? <span style="opacity:0.6">(Auto-dismiss in 10s)</span></div>
+            <div style="font-size:11px;margin-bottom:8px">Cancel download?</div>
             <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
               <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
               <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">No</button>
@@ -326,6 +326,10 @@ function listenToJob(task) {
     if (!task.done && !task.msg) {
       task.msg = { type: 'error', text: 'Connection lost.' }
       cleanupTask(task)
+      // Auto-hide after 5 seconds
+      setTimeout(() => {
+        removeTask(task.id)
+      }, 5000)
     }
   }
 }
