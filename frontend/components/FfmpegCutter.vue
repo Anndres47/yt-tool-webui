@@ -220,10 +220,14 @@ onMounted(async () => {
     const jobs = res.data
     for (const [id, job] of Object.entries(jobs)) {
       if (job.type === 'ffmpeg' && job.status === 'running') {
+        // Restore ONLY the background process state
         activeJobId = id
         cutting.value = true
         cutPercent.value = job.percent || 0
-        outputName.value = job.name || ''
+        
+        // We DO NOT restore outputName or libraryFile here 
+        // to ensure the UI panels reset as requested.
+        
         listenToCut(id)
         break
       }
