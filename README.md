@@ -60,23 +60,18 @@ yt-tool-webui/
 │   ├── logger.py        # Append timestamped command log entries
 │   └── requirements.txt
 ├── frontend/
-│   ├── index.html       # HTML shell, loads Google Fonts
+│   ├── index.html       # HTML shell
 │   ├── main.js          # Vue app entry point
-│   ├── App.vue          # Root layout, sidebar nav, global CSS
-│   ├── vite.config.js   # Vue plugin + /api proxy for local dev
 │   └── components/
 │       ├── YtDownloader.vue   # Tab 1 — download
 │       ├── FfmpegCutter.vue   # Tab 2 — cut
 │       └── Settings.vue       # Tab 3 — config
 ├── Dockerfile
 ├── docker-compose.yml
-├── .dockerignore
-└── data/                # Created on first run (gitignore this)
-    ├── *.mp4 / *.mkv …  # Downloaded files
-    ├── config.json       # Saved settings
-    ├── jobs.json         # Persistent job state (active/done/interrupted)
-    └── logs/
-        └── commands.log
+├── data/                # Internal state (config.json, jobs.json, logs/)
+├── downloads/           # Temporary working directory for active downloads
+└── outputs/             # Finished downloads and recovered livestreams
+    └── ffmpeg/          # Edited clips from the Cutter
 ```
 
 ---
@@ -90,13 +85,12 @@ yt-tool-webui/
 
 ```bash
 # Clone / copy the project, then:
-mkdir -p data
-docker compose up --build
+docker compose up -d --build
 ```
 
 Open `http://<host-ip>:8047`.
 
-The `./data` directory is created automatically and mapped into the container. Everything that needs to persist — downloaded files, settings, logs — lives there.
+The `data/`, `downloads/`, and `outputs/` directories are created automatically on your host and mapped into the container. 
 
 ### Updating
 
@@ -120,17 +114,18 @@ ports:
 
 ## Configuration
 
-All settings are available in the **Config** tab of the UI and saved to `data/config.json`.
+All settings are available in the **Config** tab of the UI.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Download path | `/app/downloads` | Where files are saved inside the container. The default maps to `./data/` on your host. Only change this if you mount a different volume. |
-| Cookies.txt path | _(empty)_ | Absolute path to a Netscape-format cookies file inside the container. Required for age-gated or members-only content. |
-| PO Token | _(empty)_ | YouTube Proof-of-Origin token. Required for some bot-protected streams. [How to obtain one.](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#po-token-guide) |
+| Data path | `/app/data` | Where internal state (config, jobs, logs) is stored. |
+| Download path | `/app/downloads` | Temporary working directory for active downloads. |
+| Output path | `/app/outputs` | Where finished files are moved upon completion. |
+| Cookies.txt path | _(empty)_ | Absolute path to a Netscape-format cookies file inside the container. |
 
 ### Using cookies
 
-Export your YouTube cookies from the browser (e.g. with the [cookies.txt extension](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)), place the file in `./data/`, then set the path to `/app/downloads/cookies.txt` in the Config tab.
+Place your `cookies.txt` in the `./data/` folder on your host, then set the path to `/app/data/cookies.txt` in the Config tab.
 
 ---
 

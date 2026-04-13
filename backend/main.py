@@ -340,6 +340,9 @@ async def api_download_progress(job_id: str):
                 line = line_bytes.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
+                
+                # Output to console so it appears in docker logs
+                print(line, flush=True)
 
                 event = None
 
@@ -374,7 +377,9 @@ async def api_download_progress(job_id: str):
             if rc == 0 or rc == -2:  # -2 = SIGINT (ytarchive abort-and-save)
                 yield f"data: {json.dumps({'done': True})}\n\n"
             else:
-                yield f"data: {json.dumps({'error': f'Process exited with code {rc}'})}\n\n"
+                err_msg = f"Process exited with code {rc}"
+                print(f"\033[91mERROR: {err_msg}\033[0m", flush=True)
+                yield f"data: {json.dumps({'error': err_msg})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
@@ -566,6 +571,10 @@ async def api_ffmpeg_progress(job_id: str):
                 if not line_bytes:
                     break
                 line = line_bytes.decode("utf-8", errors="replace").strip()
+                
+                # Output to console so it appears in docker logs
+                if line:
+                    print(line, flush=True)
 
                 # ffmpeg -progress pipe:1 emits key=value lines
                 if line.startswith("out_time_us="):
@@ -585,8 +594,11 @@ async def api_ffmpeg_progress(job_id: str):
             if rc == 0:
                 yield f"data: {json.dumps({'done': True, 'output': output})}\n\n"
             else:
-                stderr = await process.stderr.read()
-                yield f"data: {json.dumps({'error': stderr.decode('utf-8', errors='replace')[-500:]})}\n\n"
+                stderr_bytes = await process.stderr.read()
+                stderr_str = stderr_bytes.decode('utf-8', errors='replace').strip()
+                # Print the error in red to the console for docker logs
+                print(f"\033[91mFFMPEG ERROR:\n{stderr_str}\033[0m", flush=True)
+                yield f"data: {json.dumps({'error': stderr_str[-500:]})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
