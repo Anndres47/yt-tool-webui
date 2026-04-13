@@ -333,6 +333,42 @@ async def api_library_stream(folder: str, filename: str, request: Request):
 # Download
 # ---------------------------------------------------------------------------
 
+async def watch_job(job_id: str, process: asyncio.subprocess.Process):
+    """Background task that waits for a process to finish and handles cleanup."""
+    rc = await process.wait()
+    
+    current_job = job_manager.get_job(job_id)
+    if not current_job:
+        return
+
+    # rc == 0: success
+    # rc == -2: SIGINT (handled by python)
+    # rc == 2 or 130: SIGINT (handled by ytarchive/shell)
+    is_success = rc in [0, -2, 2, 130]
+    
+    # Final cleanup logic
+    temp_dir = current_job.get("temp_dir")
+    if temp_dir and os.path.exists(temp_dir):
+        # Only delete if it was an intentional Abort/Cancel or if it was a success
+        # (Success means files were already moved to outputs)
+        cleanup_requested = current_job.get("cleanup_files")
+        if cleanup_requested or is_success:
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
+
+    final_status = "cancelled" if current_job.get("status") == "cancelled" else "done"
+    if not is_success and final_status != "cancelled":
+        final_status = "error"
+        print(f"\033[91m[job:{job_id[:8]}] Process failed with code {rc}\033[0m", flush=True)
+
+    job_manager.update_job(job_id, {"status": final_status, "pid": None})
+    # Remove from active processes
+    if job_id in job_manager.processes:
+        del job_manager.processes[job_id]
+
+
 @app.post("/api/download")
 async def api_download(
     url: str = Form(...),
@@ -465,8 +501,13 @@ async def api_download(
         "mode": mode, 
         "type": "download", 
         "temp_dir": str(job_temp_dir),
-        "url": url
+        "url": url,
+        "status": "running"
     }, process=process)
+
+    # Start the persistent background watcher
+    asyncio.create_task(watch_job(job_id, process))
+    
     return {"job_id": job_id}
 
 
@@ -481,19 +522,84 @@ async def api_download_progress(job_id: str):
         mode = job.get("mode")
 
         if not process:
-             yield f"data: {json.dumps({'error': 'Process not found or already finished'})}\n\n"
+             # Check if it already finished while we were connecting
+             status = job.get("status")
+             if status == "done":
+                 yield f"data: {json.dumps({'done': True})}\n\n"
+             elif status in ["error", "cancelled"]:
+                 yield f"data: {json.dumps({'error': 'Process terminated'})}\n\n"
+             else:
+                 yield f"data: {json.dumps({'error': 'Process not found'})}\n\n"
              return
 
         try:
             stalled_seconds = 0
-            while True:
+            buffer = ""
+            # Only read while the process is alive
+            while process.returncode is None:
                 try:
-                    # Inner timeout: send heartbeats every 15s to keep SSE alive
-                    line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=15.0)
-                    stalled_seconds = 0 # Reset watchdog on any output
+                    # Read chunks instead of whole lines to catch carriage returns (\r)
+                    chunk_bytes = await asyncio.wait_for(process.stdout.read(1024), timeout=15.0)
+                    if not chunk_bytes:
+                        break
+                    
+                    stalled_seconds = 0 # Reset watchdog
+                    buffer += chunk_bytes.decode("utf-8", errors="replace")
+                    
+                    # Split by both \n and \r to catch in-place updates
+                    lines = re.split(r"[\r\n]+", buffer)
+                    
+                    # Keep the last partial line in the buffer
+                    buffer = lines.pop() if lines else ""
+                    
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        # Output to console
+                        print(f"[job:{job_id[:8]}] {line}", flush=True)
+
+                        event = None
+                        if mode == "livestream":
+                            # ytarchive progress parsing
+                            # Support dreammu fork: "Video Fragments: 76; Audio Fragments: 83"
+                            seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
+                            if seg_match:
+                                # Extract all numbers found in the line to sum Video + Audio if available
+                                all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
+                                segments = sum(int(n) for n in all_nums)
+                                
+                                # Check if live: ytarchive prints "at the live edge" or similar
+                                is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
+                                event = json.dumps({
+                                    "live": is_live, 
+                                    "segments": segments,
+                                    "mode": "livestream"
+                                })
+                        else:
+                            # yt-dlp parsing
+                            # yt-dlp: [download]  42.3% of 1.23GiB at  3.21MiB/s ETA 00:12
+                            dl_match = re.search(
+                                r"\[download\]\s+([\d.]+)%\s+of\s+[\d.]+\S+\s+at\s+([~\d.]+\S+)\s+ETA\s+([~\d:]+)",
+                                line,
+                            )
+                            if dl_match:
+                                event = json.dumps({
+                                    "percent": float(dl_match.group(1)),
+                                    "speed": dl_match.group(2).replace("~", ""),
+                                    "eta": dl_match.group(3).replace("~", ""),
+                                })
+
+                        if event:
+                            yield f"data: {event}\n\n"
+                            # Small sleep to prevent SSE flooding
+                            await asyncio.sleep(0.05)
+
                 except asyncio.TimeoutError:
                     stalled_seconds += 15
                     if stalled_seconds >= 120:
+                        # WATCHDOG: Kill process
                         print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 120s. Terminating.\033[0m", flush=True)
                         process.terminate()
                         job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True})
@@ -503,86 +609,21 @@ async def api_download_progress(job_id: str):
                     yield ": ping\n\n"
                     continue
 
-                if not line_bytes:
-                    break
-                line = line_bytes.decode("utf-8", errors="replace").strip()
-                if not line:
-                    continue
-                
-                # Output to console so it appears in docker logs
-                print(f"[job:{job_id[:8]}] {line}", flush=True)
-
-                event = None
-
-                if mode == "livestream":
-                    # ytarchive progress parsing
-                    # Support dreammu fork: "Video Fragments: 76; Audio Fragments: 83"
-                    # And original: "Video Segments: 76"
-                    seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
-                    if seg_match:
-                        # Extract all numbers found in the line to sum Video + Audio if available
-                        all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
-                        segments = sum(int(n) for n in all_nums)
-                        
-                        # Check if live: ytarchive prints "at the live edge" or similar
-                        is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
-                        event = json.dumps({
-                            "live": is_live, 
-                            "segments": segments,
-                            "mode": "livestream"
-                        })
-                else:
-                    # yt-dlp: [download]  42.3% of 1.23GiB at  3.21MiB/s ETA 00:12
-                    # The regex handles optional ~ and extra spaces
-                    dl_match = re.search(
-                        r"\[download\]\s+([\d.]+)%\s+of\s+[\d.]+\S+\s+at\s+([~\d.]+\S+)\s+ETA\s+([~\d:]+)",
-                        line,
-                    )
-                    if dl_match:
-                        event = json.dumps({
-                            "percent": float(dl_match.group(1)),
-                            "speed": dl_match.group(2).replace("~", ""),
-                            "eta": dl_match.group(3).replace("~", ""),
-                        })
-
-                if event:
-                    yield f"data: {event}\n\n"
-
-            rc = await process.wait()
-            # rc == 0: success
-            # rc == -2: SIGINT (handled by python)
-            # rc == 2 or 130: SIGINT (handled by ytarchive/shell)
-            if rc in [0, -2, 2, 130]:
+            # Check for final result after process finishes
+            # Give the watcher task a moment to update the status
+            await asyncio.sleep(0.5)
+            updated_job = job_manager.get_job(job_id)
+            if updated_job and updated_job.get("status") == "done":
                 yield f"data: {json.dumps({'done': True})}\n\n"
-            else:
-                err_msg = f"Process exited with code {rc}"
-                print(f"\033[91mERROR: {err_msg}\033[0m", flush=True)
-                yield f"data: {json.dumps({'error': err_msg})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        finally:
-            # Check if it was already cancelled before setting to done
-            current_job = job_manager.get_job(job_id)
-            temp_dir = current_job.get("temp_dir") if current_job else None
-            
-            # If we have a dedicated temp dir, clean it up
-            if temp_dir and os.path.exists(temp_dir):
-                # If specifically requested to delete (Abort/Cancel)
-                if current_job.get("cleanup_files"):
-                    try:
-                        shutil.rmtree(temp_dir)
-                    except:
-                        pass
-                # On success, still remove the empty or leftover folder
-                else:
-                    try:
-                        # Clean up if successful (files have been moved to outputs)
-                        shutil.rmtree(temp_dir)
-                    except:
-                        pass
+            elif updated_job and updated_job.get("status") == "error":
+                yield f"data: {json.dumps({'error': 'Process failed'})}\n\n"
 
-            final_status = "cancelled" if current_job and current_job.get("status") in ["cancelled", "finishing"] else "done"
-            job_manager.update_job(job_id, {"status": final_status, "pid": None})
+        except Exception as e:
+            # Browser disconnected, just exit the loop
+            pass
+        finally:
+            # The background watch_job() task handles cleanup
+            pass
 
     return StreamingResponse(
         event_stream(),
@@ -807,6 +848,7 @@ async def api_ffmpeg_cut(
         "duration_s": float(duration_s) if duration_s else 0,
         "output": output_file,
         "tmp_input": input_path if not library_path else None,
+        "status": "running"
     }, process=process)
     return {"job_id": job_id}
 
@@ -823,17 +865,22 @@ async def api_ffmpeg_progress(job_id: str):
         output = job.get("output", "")
 
         if not process:
-            yield f"data: {json.dumps({'error': 'Process not found or already finished'})}\n\n"
+            # Check for final result
+            status = job.get("status")
+            if status == "done":
+                yield f"data: {json.dumps({'done': True, 'output': output})}\n\n"
+            else:
+                yield f"data: {json.dumps({'error': 'Process not found'})}\n\n"
             return
 
         try:
-            while True:
+            while process.returncode is None:
                 line_bytes = await process.stdout.readline()
                 if not line_bytes:
                     break
                 line = line_bytes.decode("utf-8", errors="replace").strip()
                 
-                # Output to console so it appears in docker logs
+                # Output to console
                 if line:
                     print(f"[job:{job_id[:8]}] {line}", flush=True)
 
@@ -857,20 +904,13 @@ async def api_ffmpeg_progress(job_id: str):
             else:
                 stderr_bytes = await process.stderr.read()
                 stderr_str = stderr_bytes.decode('utf-8', errors='replace').strip()
-                # Print the error in red to the console for docker logs
                 print(f"\033[91mFFMPEG ERROR:\n{stderr_str}\033[0m", flush=True)
                 yield f"data: {json.dumps({'error': stderr_str[-500:]})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            pass
         finally:
-            # Clean up uploaded temp file if any
-            tmp = job.get("tmp_input")
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-            job_manager.update_job(job_id, {"status": "done", "pid": None})
+            # Clean up handled by the caller or a watcher if we implement it for FFmpeg too
+            pass
 
     return StreamingResponse(
         event_stream(),
