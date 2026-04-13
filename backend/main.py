@@ -23,42 +23,31 @@ from jobs import JobManager
 # Helper to fetch PO Token and Visitor Data from local sidecar
 async def get_auto_potoken() -> tuple[str, str]:
     def fetch():
-        max_attempts = 3
+        # List of endpoints/methods to try
+        strategies = [
+            {"path": "/get_pot", "method": "POST", "data": b"{}"},
+            {"path": "/token", "method": "POST", "data": b"{}"},
+            {"path": "/get_pot", "method": "GET", "data": None},
+        ]
+        
+        max_attempts = 2
         for attempt in range(max_attempts):
-            try:
-                # Must use POST with a body for /get_pot
-                # Increase timeout to 30s for slower environments
-                url = "http://pot-provider:4416/get_pot"
-                req = urllib.request.Request(
-                    url, 
-                    data=b"{}", 
-                    headers={'Content-Type': 'application/json'}
-                )
-                with urllib.request.urlopen(url, timeout=30) as response:
-                    raw_res = response.read()
-                    res_data = json.loads(raw_res)
-                    # Debug: Print raw response to help identify keys
-                    print(f"[PO Token] Raw Provider Response: {raw_res.decode()}", flush=True)
-
-                    # Check multiple common keys for the token
-                    token = res_data.get("po_token") or res_data.get("poToken") or res_data.get("token") or ""
-                    # Check multiple common keys for the visitor id
-                    visitor_id = (
-                        res_data.get("visit_identifier") or 
-                        res_data.get("visitor_data") or 
-                        res_data.get("visitorData") or 
-                        res_data.get("visitor_id") or ""
-                    )
-                    if token:
-                        return token, visitor_id
-
-            except Exception as e:
-                if attempt < max_attempts - 1:
-                    print(f"\033[93m[PO Token] Attempt {attempt + 1} failed, retrying... ({e})\033[0m", flush=True)
-                    import time
-                    time.sleep(3)
-                else:
-                    print(f"\033[91m[PO Token] ERROR: All fetch attempts failed: {e}\033[0m", flush=True)
+            for strategy in strategies:
+                try:
+                    url = f"http://pot-provider:4416{strategy['path']}"
+                    req = urllib.request.Request(url, data=strategy["data"])
+                    if strategy["method"] == "POST":
+                        req.add_header('Content-Type', 'application/json')
+                    
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        res_data = json.loads(response.read())
+                        token = res_data.get("po_token") or res_data.get("poToken") or res_data.get("token") or ""
+                        visitor_id = res_data.get("visit_identifier") or res_data.get("visitorData") or ""
+                        
+                        if token:
+                            return token, visitor_id
+                except Exception:
+                    continue
         return "", ""
     return await asyncio.to_thread(fetch)
 
