@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YT Downloader</title>
+</head>
+<body>
+    <h1>YT Downloader WebUI</h1>
+    <form action="/download" method="post" enctype="multipart/form-data">
+        <label>URL: <input type="text" name="url" required></label><br>
+        <label>Mode:</label>
+        <input type="radio" id="ytarchive" name="mode" value="ytarchive" checked>
+        <label for="ytarchive">Live Stream (ytarchive)</label>
+        <input type="radio" id="ytdlp" name="mode" value="yt-dlp">
+        <label for="ytdlp">Video (yt-dlp)</label><br>
+
+        <label>Cookies File: <input type="file" name="cookies"></label><br>
+        <label>--potoken (ytarchive only): <input type="text" name="potoken"></label><br>
+        <label>Extra args: <input type="text" name="extra_args"></label><br>
+
+        <button type="submit">Download</button>
+    </form>
+</body>
+</html>
