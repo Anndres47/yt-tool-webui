@@ -1,0 +1,9 @@
+version: '3'
+services:
+  ytwebui:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./downloads:/app/downloads
+    restart: unless-stopped
