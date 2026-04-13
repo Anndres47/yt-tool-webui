@@ -26,7 +26,8 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 - **Filename Sanitization** — output names are automatically cleaned; spaces are replaced with underscores (`_`) for better filesystem compatibility.
 - **Settings panel** — configure Data, Download (temp), and Output paths directly from the UI.
 - **Advanced Settings** — pass custom CLI arguments to `yt-dlp`, `ytarchive`, and `ffmpeg` for specialized workflows.
-- **Automated PO Tokens** — an integrated Rust-based `pot-provider` sidecar container automatically generates Proof-of-Origin tokens for every download, bypassing bot blocks with zero configuration.
+- **Automated PO Tokens** — an integrated `pot-provider` sidecar automatically generates Proof-of-Origin tokens. The tool now intelligently binds these tokens with matching **Visitor IDs** (extracted via exhaustive key detection and URL decoding) to bypass YouTube's strictest security challenges without manual input.
+- **Universal Provider Discovery** — the backend automatically detects and connects to various PO Token provider versions by trying multiple endpoints (`/get_pot`, `/token`) and request methods.
 - **Forward Progress Watchdog** — the backend monitors all downloads; if a process stalls for 60 seconds (potentially due to a 403 bot block), it is automatically killed and cleaned up.
 - **Cancel Cut** — instantly stop slow re-encodes with automatic cleanup of unfinished files.
 - **Persistent UI State** — navigate between tabs without losing progress or input data thanks to Vue's `KeepAlive`.
