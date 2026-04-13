@@ -72,21 +72,32 @@
         </button>
 
         <button
-          v-if="running && mode !== 'livestream'"
+          v-if="running"
           class="btn btn-danger"
-          @click="cancel"
-        >Cancel</button>
-
-        <button
-          v-if="running && mode === 'livestream'"
-          class="btn btn-danger"
-          @click="cancel"
+          @click="showCancelConfirm = true"
+          :disabled="showCancelConfirm"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <rect x="2" y="2" width="8" height="8" rx="1" stroke="currentColor" stroke-width="1.5"/>
           </svg>
-          Abort &amp; Save
+          {{ mode === 'livestream' ? 'Abort & Save' : 'Cancel' }}
         </button>
+      </div>
+
+      <!-- Cancel Confirmation -->
+      <div v-if="showCancelConfirm" class="msg msg-info" style="margin-top:16px">
+        <div style="margin-bottom:8px"><strong>Cancel download?</strong></div>
+        <div style="margin-bottom:12px;opacity:0.8">
+          {{ mode === 'livestream' 
+            ? 'Do you want to keep the segments downloaded so far and mux them into a video, or delete everything?'
+            : 'Do you want to stop the download and keep partial files, or delete everything?' 
+          }}
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" style="padding:6px 14px" @click="cancel(false)">Keep &amp; Mux</button>
+          <button class="btn btn-danger" style="padding:6px 14px" @click="cancel(true)">Delete All</button>
+          <button class="btn btn-ghost" style="padding:6px 14px" @click="showCancelConfirm = false">Go Back</button>
+        </div>
       </div>
 
       <!-- Progress -->
@@ -151,6 +162,7 @@ const speed = ref('')
 const eta = ref('')
 const isLive = ref(false)
 const progressMsg = ref(null)
+const showCancelConfirm = ref(false)
 
 let currentJobId = null
 let eventSource = null
@@ -212,9 +224,14 @@ const startDownload = async () => {
   }
 }
 
-const cancel = async () => {
+const cancel = async (deleteTemp = false) => {
   if (!currentJobId) return
-  try { await axios.post(`/api/download/cancel/${currentJobId}`) } catch (_) {}
+  showCancelConfirm.value = false
+  try { 
+    const form = new FormData()
+    form.append('delete', deleteTemp.toString())
+    await axios.post(`/api/download/cancel/${currentJobId}`, form) 
+  } catch (_) {}
 }
 
 const finish = () => {

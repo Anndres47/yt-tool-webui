@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from config import get_config, save_config
 from logger import log_command
+from jobs import JobManager
 
 app = FastAPI()
 app.add_middleware(
@@ -24,8 +25,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory job store: job_id -> {process, mode, type, duration_s}
-jobs: dict = {}
+# Initialize job manager
+job_manager = JobManager(get_config()["download_path"])
+job_manager.cleanup_on_startup()
+
 
 QUALITY_MAP = {
     "best": "bestvideo+bestaudio/best",
@@ -60,7 +63,69 @@ async def api_save_settings(request: Request):
     # Re-create downloads dir if path changed
     dl = data.get("download_path", "/app/downloads")
     Path(dl).mkdir(parents=True, exist_ok=True)
+    # Update job manager path
+    job_manager.path = Path(dl)
+    job_manager.jobs_file = job_manager.path / "jobs.json"
+    job_manager.load()
     return {"status": "saved"}
+
+
+@app.get("/api/jobs")
+def api_get_jobs():
+    return job_manager.get_all_jobs()
+
+
+@app.post("/api/jobs/clear")
+def api_clear_jobs():
+    # Only clear jobs that are NOT running
+    to_remove = [jid for jid, j in job_manager.jobs.items() if j.get("status") != "running"]
+    for jid in to_remove:
+        job_manager.remove_job(jid)
+    return {"status": "cleared"}
+
+
+@app.post("/api/jobs/finalize/{job_id}")
+async def api_finalize_job(job_id: str):
+    job = job_manager.get_job(job_id)
+    if not job or job.get("mode") != "livestream":
+        raise HTTPException(status_code=400, detail="Invalid job for finalization")
+
+    dl_path = get_config()["download_path"]
+    # ytarchive typically uses {id}.f*.ts or similar.
+    # We look for .ts files in the download directory.
+    # This is a bit heuristic but helpful for recovery.
+    ts_files = sorted(Path(dl_path).glob("*.ts"))
+    if not ts_files:
+        raise HTTPException(status_code=404, detail="No segments found to finalize")
+
+    output_path = f"{dl_path}/recovered_{job_id[:8]}.mp4"
+
+    # Create a concat file for ffmpeg
+    concat_file = Path(dl_path) / f"concat_{job_id}.txt"
+    with open(concat_file, "w") as f:
+        for ts in ts_files:
+            # Use absolute path and escape single quotes for ffmpeg concat demuxer
+            safe_path = str(ts.resolve()).replace("'", "'\\''")
+            f.write(f"file '{safe_path}'\n")
+
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "-i", str(concat_file), "-c", "copy", output_path
+    ]
+
+    log_command(job_id, cmd)
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    # Update job to track this new process
+    job_manager.update_job(job_id, {"status": "running", "pid": process.pid, "type": "finalize"})
+    job_manager.processes[job_id] = process
+
+    return {"job_id": job_id, "status": "finalizing"}
 
 
 # ---------------------------------------------------------------------------
@@ -208,19 +273,23 @@ async def api_download(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
-    jobs[job_id] = {"process": process, "mode": mode, "type": "download"}
+    job_manager.add_job(job_id, {"mode": mode, "type": "download"}, process=process)
     return {"job_id": job_id}
 
 
 @app.get("/api/download/progress/{job_id}")
 async def api_download_progress(job_id: str):
-    job = jobs.get(job_id)
+    job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     async def event_stream():
-        process = job["process"]
-        mode = job["mode"]
+        process = job.get("process")
+        mode = job.get("mode")
+
+        if not process:
+             yield f"data: {json.dumps({'error': 'Process not found or already finished'})}\n\n"
+             return
 
         try:
             while True:
@@ -268,7 +337,19 @@ async def api_download_progress(job_id: str):
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         finally:
-            jobs.pop(job_id, None)
+            # Check if it was already cancelled before setting to done
+            current_job = job_manager.get_job(job_id)
+            if current_job and current_job.get("cleanup_ts") and mode == "livestream":
+                # Delete all .ts segments in dl_path (best effort)
+                dl_path = get_config()["download_path"]
+                for ts in Path(dl_path).glob("*.ts"):
+                    try:
+                        os.unlink(ts)
+                    except:
+                        pass
+
+            final_status = "cancelled" if current_job and current_job.get("status") in ["cancelled", "finishing"] else "done"
+            job_manager.update_job(job_id, {"status": final_status, "pid": None})
 
     return StreamingResponse(
         event_stream(),
@@ -278,21 +359,32 @@ async def api_download_progress(job_id: str):
 
 
 @app.post("/api/download/cancel/{job_id}")
-async def api_download_cancel(job_id: str):
-    job = jobs.get(job_id)
+async def api_download_cancel(job_id: str, delete: str = Form("false")):
+    job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    process = job["process"]
-    mode = job["mode"]
+    process = job.get("process")
+    mode = job.get("mode")
+    is_delete = delete.lower() == "true"
+
+    if not process:
+        return {"status": "not_running"}
     try:
         if mode == "livestream":
-            # SIGINT tells ytarchive to mux and save up to current point
-            process.send_signal(signal.SIGINT)
+            if is_delete:
+                # Mark for cleanup if they chose to delete
+                job_manager.update_job(job_id, {"status": "cancelled", "cleanup_ts": True})
+                process.terminate()
+            else:
+                # SIGINT tells ytarchive to mux and save up to current point
+                process.send_signal(signal.SIGINT)
+                job_manager.update_job(job_id, {"status": "finishing"})
         else:
             process.terminate()  # SIGTERM — yt-dlp cleans up .part files
+            job_manager.update_job(job_id, {"status": "cancelled"})
     except ProcessLookupError:
         pass
-    return {"status": "cancelled"}
+    return {"status": "signal_sent"}
 
 
 # ---------------------------------------------------------------------------
@@ -321,19 +413,38 @@ async def api_ffmpeg_cut(
             raise HTTPException(status_code=404, detail="File not found")
         input_path = str(resolved)
     elif video:
-        # Enforce 1 GB limit
-        contents = await video.read()
-        if len(contents) > ONE_GB:
-            raise HTTPException(status_code=413, detail="File exceeds 1 GB limit")
-        # Sanitize filename — strip any path components, use uuid to avoid collisions
-        safe_name = Path(video.filename).name if video.filename else "upload"
+        # Stream to disk to save RAM (64KB chunks)
+        safe_upload_name = Path(video.filename).name if video.filename else "upload"
         tmp_job = str(uuid.uuid4())
-        input_path = f"/tmp/{tmp_job}_{safe_name}"
-        await asyncio.to_thread(_write_file, input_path, contents)
+        input_path = f"/tmp/{tmp_job}_{safe_upload_name}"
+        
+        total_size = 0
+        try:
+            async with aiofiles.open(input_path, "wb") as f:
+                while True:
+                    chunk = await video.read(65536)
+                    if not chunk:
+                        break
+                    total_size += len(chunk)
+                    if total_size > ONE_GB:
+                        raise HTTPException(status_code=413, detail="File exceeds 1 GB limit")
+                    await f.write(chunk)
+        except HTTPException:
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            raise
+        except Exception as e:
+            if os.path.exists(input_path):
+                os.unlink(input_path)
+            raise HTTPException(status_code=500, detail=str(e))
     else:
         raise HTTPException(status_code=400, detail="No file provided")
 
-    output_path = f"{dl_path}/{name}.mp4"
+    # Sanitize output name to prevent path traversal
+    safe_output_name = re.sub(r'[^a-zA-Z0-9_\-]', '', name)
+    if not safe_output_name:
+        safe_output_name = f"clip_{uuid.uuid4().hex[:8]}"
+    output_path = f"{dl_path}/{safe_output_name}.mp4"
     job_id = str(uuid.uuid4())
 
     audio_codec = ["libmp3lame", "-b:a", "320k"] if reencode_audio == "true" else ["copy"]
@@ -364,26 +475,29 @@ async def api_ffmpeg_cut(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    jobs[job_id] = {
-        "process": process,
+    job_manager.add_job(job_id, {
         "type": "ffmpeg",
         "duration_s": float(duration_s) if duration_s else 0,
         "output": output_path,
         "tmp_input": input_path if not library_path else None,
-    }
+    }, process=process)
     return {"job_id": job_id}
 
 
 @app.get("/api/ffmpeg/progress/{job_id}")
 async def api_ffmpeg_progress(job_id: str):
-    job = jobs.get(job_id)
+    job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
     async def event_stream():
-        process = job["process"]
+        process = job.get("process")
         duration_s = job.get("duration_s", 0)
         output = job.get("output", "")
+
+        if not process:
+            yield f"data: {json.dumps({'error': 'Process not found or already finished'})}\n\n"
+            return
 
         try:
             while True:
@@ -422,7 +536,7 @@ async def api_ffmpeg_progress(job_id: str):
                     os.unlink(tmp)
                 except OSError:
                     pass
-            jobs.pop(job_id, None)
+            job_manager.update_job(job_id, {"status": "done", "pid": None})
 
     return StreamingResponse(
         event_stream(),
@@ -444,4 +558,4 @@ if __name__ == "__main__":
     import uvicorn
     cfg = get_config()
     Path(cfg["download_path"]).mkdir(parents=True, exist_ok=True)
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    uvicorn.run(app, host="0.0.0.0", port=8047)

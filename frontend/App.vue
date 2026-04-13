@@ -24,7 +24,7 @@
       </nav>
 
       <div class="sidebar-footer">
-        <span class="version-tag">v3.0</span>
+        <span class="version-tag">v1.0</span>
       </div>
     </aside>
 

@@ -1,6 +1,6 @@
 {
-  "name": "yt-webui",
-  "version": "3.0.0",
+  "name": "yt-tool-webui",
+  "version": "1.0.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build"

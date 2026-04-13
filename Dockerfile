@@ -32,5 +32,5 @@ COPY backend ./backend
 WORKDIR /app/backend
 RUN pip install -r requirements.txt
 
-EXPOSE 7860
+EXPOSE 8047
 CMD ["python", "main.py"]

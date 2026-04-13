@@ -17,11 +17,6 @@ yarn-error.log*
 # User Data & Local Config
 # CRITICAL: Prevents committing videos, logs, and local settings
 data/
-downloads/
-outputs/
-_history/
-_current_backup/
-_temp_extract/
 
 # IDE / Editor folders
 .vscode/

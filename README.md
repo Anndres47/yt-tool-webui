@@ -1,4 +1,4 @@
-# yt-webui-v3
+# yt-tool-webui
 
 A self-hosted web interface for downloading YouTube videos and trimming them — all from the browser, no command line required. Runs entirely inside Docker.
 
@@ -13,7 +13,7 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 - **Real-time progress bars** via Server-Sent Events (SSE) — no polling
 - **FFmpeg Cutter** — trim any video or audio file without re-encoding
   - **Library picker** — select a file already in the downloads folder, streamed directly to the browser via HTTP range requests; no upload needed
-  - **Upload fallback** — upload an external file (up to 1 GB) for cutting
+  - **Upload fallback** — upload an external file (up to 1 GB) for cutting; **optimized for low RAM usage** via streaming chunked uploads
   - **Native video preview** — seek anywhere in the file inside the browser before setting cut points
   - **Set from playhead** — play to the exact frame you want, click to capture start/end time
   - **Optional audio re-encode** — cut output re-encodes audio to MP3 320kbps via ffmpeg; video is always stream-copied (no quality loss, no re-encode)
@@ -52,10 +52,11 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 ## Project structure
 
 ```
-yt-webui-v3/
+yt-tool-webui/
 ├── backend/
 │   ├── main.py          # FastAPI app — all API endpoints
 │   ├── config.py        # Load/save config.json from the data volume
+│   ├── jobs.py          # JobManager for persistent state
 │   ├── logger.py        # Append timestamped command log entries
 │   └── requirements.txt
 ├── frontend/
@@ -73,6 +74,7 @@ yt-webui-v3/
 └── data/                # Created on first run (gitignore this)
     ├── *.mp4 / *.mkv …  # Downloaded files
     ├── config.json       # Saved settings
+    ├── jobs.json         # Persistent job state (active/done/interrupted)
     └── logs/
         └── commands.log
 ```
@@ -92,7 +94,7 @@ mkdir -p data
 docker compose up --build
 ```
 
-Open `http://<host-ip>:7860`.
+Open `http://<host-ip>:8047`.
 
 The `./data` directory is created automatically and mapped into the container. Everything that needs to persist — downloaded files, settings, logs — lives there.
 
@@ -111,7 +113,7 @@ Edit `docker-compose.yml`:
 
 ```yaml
 ports:
-  - "8080:7860"   # host:container
+  - "8080:8047"   # host:container
 ```
 
 ---
@@ -145,11 +147,21 @@ Browser  →  POST /api/download  →  FastAPI spawns subprocess  →  yt-dlp or
 ```
 
 1. The browser POSTs the URL, mode, and quality as `multipart/form-data`.
-2. The backend builds the CLI command, logs it, spawns it with `asyncio.create_subprocess_exec`, stores the process in an in-memory job dict, and returns a `job_id` immediately.
+2. The backend builds the CLI command, logs it, spawns it with `asyncio.create_subprocess_exec`, stores the job metadata in a persistent store (`jobs.json`), and returns a `job_id`.
 3. The browser opens an `EventSource` connection to the progress endpoint.
 4. The backend reads the subprocess stdout line by line. For yt-dlp it parses `[download] 42.3% of 1.23GiB at 3.21MiB/s ETA 00:12`. For ytarchive it parses segment counts and detects the live edge.
 5. Parsed events are emitted as SSE frames: `data: {"percent": 42.3, "speed": "3.21MiB/s", "eta": "00:12"}`.
 6. Cancel (video/audio) sends `SIGTERM` to yt-dlp, which cleans up its `.part` files. Abort & Save (livestream) sends `SIGINT` to ytarchive, which muxes and saves everything recorded so far.
+
+### Job Persistence & Recovery
+
+The backend tracks all jobs in a `JobManager` that persists to `data/jobs.json`. This enables:
+- **Resilient State:** If the server restarts, orphaned downloads are identified on startup and marked as "interrupted."
+- **Smart Cancellation:** 
+  - **Livestreams:** Aborting a livestream prompts the user to either **Keep & Mux** (graceful stop with `SIGINT`) or **Delete All** (forced stop with cleanup).
+  - **Regular Downloads:** Users can choose to stop and keep partial files or perform a full cleanup.
+- **Livestream Finalization:** Interrupted livestreams can be manually muxed from remaining `.ts` segments via a dedicated recovery endpoint.
+- **History:** Completed, cancelled, and interrupted jobs remain in the list until manually cleared from the Config tab.
 
 ### FFmpeg cut flow
 
@@ -175,6 +187,10 @@ Key flags:
 - `-progress pipe:1` — ffmpeg writes machine-readable `key=value` progress lines to stdout; the backend parses `out_time_us` and computes `percent = out_time_us / (duration_s × 1,000,000) × 100`
 - The original source file is **never modified**
 
+**Backend Features:**
+- **RAM Optimization:** Uploaded files are streamed in chunks to disk rather than loaded entirely into memory, keeping the footprint minimal even for 1GB uploads.
+- **Security:** Output filenames are sanitized to prevent path traversal.
+
 ### Library streaming
 
 Files already in the downloads folder are served via `GET /api/library/stream/{filename}` with full HTTP `Range` header support (206 Partial Content). The browser's native `<video>` element uses range requests to seek instantly without downloading the whole file. No upload is needed — the file stays on the server.
@@ -199,6 +215,9 @@ Every CLI command is appended to `data/logs/commands.log` before execution:
 |--------|------|-------------|
 | `GET` | `/api/settings` | Return current config |
 | `POST` | `/api/settings` | Save config (JSON body) |
+| `GET` | `/api/jobs` | List all tracked jobs (active/done/interrupted/cancelled) |
+| `POST` | `/api/jobs/clear` | Clear completed/cancelled job history |
+| `POST` | `/api/jobs/finalize/{id}` | Recover/mux interrupted livestream segments |
 | `GET` | `/api/library` | List files in download folder |
 | `GET` | `/api/library/stream/{filename}` | Stream file with Range support |
 | `POST` | `/api/download` | Start download, return `{job_id}` |
@@ -218,7 +237,7 @@ cd backend
 pip install -r requirements.txt
 # Also needs yt-dlp, ytarchive, and ffmpeg on your PATH
 python main.py
-# Runs on http://localhost:7860
+# Runs on http://localhost:8047
 ```
 
 **Frontend**
@@ -228,7 +247,7 @@ cd frontend
 npm install
 npm run dev
 # Runs on http://localhost:5173
-# /api/* proxied to http://localhost:7860
+# /api/* proxied to http://localhost:8047
 ```
 
 ---
@@ -239,7 +258,7 @@ npm run dev
 - **No download queue** — multiple downloads can run in parallel, each with its own job ID, but there is no queue or concurrency limit.
 - **Keyframe-accurate cuts only** — because `-c:v copy` is used, the cut start point snaps to the nearest keyframe. For most content (especially livestream recordings) this is a fraction of a second. For frame-exact cuts a full re-encode would be needed.
 - **Livestream progress is approximate** — ytarchive does not report a reliable percentage for ongoing streams; the UI shows segment count during catch-up and switches to an indeterminate bar at the live edge.
-- **In-memory job store** — active jobs are held in a Python dict. Restarting the container while a download is running orphans the subprocess.
+- **Persistent job store** — active and past jobs are saved to `data/jobs.json`. While this survives container restarts, active subprocesses are still orphaned if the container is killed.
 
 ---
 
