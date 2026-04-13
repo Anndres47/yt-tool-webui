@@ -18,6 +18,4 @@ services:
   pot-provider:
     image: brainicism/bgutil-ytdlp-pot-provider:latest
     container_name: pot-provider
-    ports:
-      - "4416:4416"
     restart: unless-stopped
