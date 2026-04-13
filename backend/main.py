@@ -234,6 +234,7 @@ async def auto_recover_livestreams(job_ids: list[str]):
             concat_file = Path(target_dir) / f"concat_recovery_{jid}.txt"
             with open(concat_file, "w") as f:
                 for ts in ts_files:
+                    # Pre-process path outside f-string to avoid SyntaxError
                     safe_path = str(ts.resolve()).replace("'", "'\\''")
                     f.write(f"file '{safe_path}'\n")
 
@@ -330,7 +331,10 @@ async def api_finalize_job(job_id: str):
     concat_file = Path(target_dir) / f"concat_{job_id}.txt"
     with open(concat_file, "w") as f:
         for ts in ts_files:
-            f.write(f"file '{str(ts.resolve()).replace(\"'\", \"'\\\\''\")}'\n")
+            # Pre-process path outside f-string to avoid SyntaxError
+            safe_path = str(ts.resolve()).replace("'", "'\\''")
+            f.write(f"file '{safe_path}'\n")
+
     cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", output_file]
     log_command(job_id, cmd)
     process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
