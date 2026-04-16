@@ -96,11 +96,13 @@ async def get_video_title(url: str, potoken: str, visitor_id: str) -> str:
         cmd = ["yt-dlp", "--get-title", "--js-runtimes", "node"]
         cmd += ["--extractor-args", "youtubetab:skip=webpage"]
         
-        y_args = "player_skip=webpage,configs"
+        y_args = ["player_client=web,mweb", "player_skip=webpage,configs"]
         if potoken:
-            y_args += f";po_token=web+{potoken}"
+            y_args.append(f"po_token=web+{potoken}")
+        if visitor_id:
+            y_args.append(f"visitor_data={visitor_id}")
         
-        cmd += ["--extractor-args", f"youtube:{y_args}"]
+        cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
         
         if visitor_id:
             cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
@@ -534,10 +536,14 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         
         # New optimized extractor arguments to bypass bot detection
         cmd += ["--extractor-args", "youtubetab:skip=webpage"]
-        y_args = "player_skip=webpage,configs"
+        
+        y_args = ["player_client=web,mweb", "player_skip=webpage,configs"]
         if potoken:
-            y_args += f";po_token=web+{potoken}"
-        cmd += ["--extractor-args", f"youtube:{y_args}"]
+            y_args.append(f"po_token=web+{potoken}")
+        if visitor_id:
+            y_args.append(f"visitor_data={visitor_id}")
+        
+        cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
         
         # Pass visitor_id as a dedicated header, matching ytarchive's behavior
         if visitor_id:
