@@ -95,19 +95,27 @@ async def get_video_title(url: str, potoken: str, visitor_id: str) -> str:
     try:
         cmd = ["yt-dlp", "--get-title", "--js-runtimes", "node"]
         if potoken:
-            t = f"po_token=web+{potoken}"
-            # if visitor_id: t += f";visitor_data={visitor_id}"
-            cmd += ["--extractor-args", f"youtube:player-client=web;{t}"]
+            cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
+        if visitor_id:
+            cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
         cmd.append(url)
         
+        print(f"[get_video_title] EXECUTING: {shlex.join(cmd)}", flush=True)
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL
+            stderr=asyncio.subprocess.PIPE
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15.0)
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=15.0)
+        
+        if process.returncode != 0:
+            print(f"[get_video_title] ERROR: {stderr.decode()}", flush=True)
+            return "Unknown Title"
+            
         return stdout.decode().strip() or "Unknown Title"
-    except:
+    except Exception as e:
+        print(f"[get_video_title] EXCEPTION: {e}", flush=True)
         return "Unknown Title"
 
 
