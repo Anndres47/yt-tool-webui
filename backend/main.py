@@ -509,7 +509,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if reencode_audio == "true": cmd += ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         if potoken:
-            t = f"po_token=web+{potoken}"
+            t = f"po_token={potoken}"
             if visitor_id: t += f";visitor_data={visitor_id}"
             cmd += ["--extractor-args", f"youtube:player-client=web;{t}"]
         if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
