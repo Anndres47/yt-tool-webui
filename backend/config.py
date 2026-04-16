@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "audio_format": "mp3",
     "reencode_audio_instant": False,
     "disable_ytdlp_potoken": False,
+    "high_precision_cutter": False,
 }
 
 

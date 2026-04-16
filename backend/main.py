@@ -603,7 +603,7 @@ async def api_ffmpeg_cut(start: str = Form(...), end: str = Form(...), name: str
     else:
         v_codec, a_codec = (["-c:v", "libx264", "-crf", "23", "-preset", "superfast"], ["-c:a", "aac", "-b:a", "192k"]) if reencode_full == "true" else (["-c:v", "copy"], ["-c:a", "aac", "-b:a", "192k"] if cfg.get("reencode_audio_instant") else ["-c:a", "copy"])
 
-    cmd = ["ffmpeg", "-y", "-ss", start, "-i", input_path, "-t", str(float(end)-float(start))]
+    cmd = ["ffmpeg", "-y", "-ss", start, "-to", end, "-i", input_path, "-copyts"]
     if is_audio: cmd += v_codec + ["-c:a"] + a_codec
     else: cmd += ["-map", "0"] + v_codec + a_codec + ["-c:s", "copy", "-avoid_negative_ts", "make_zero", "-strict", "-2"]
     if cfg.get("ffmpeg_args"): cmd.extend(shlex.split(cfg["ffmpeg_args"]))
