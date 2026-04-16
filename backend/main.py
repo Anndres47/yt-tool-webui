@@ -112,6 +112,7 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
     """Single reader task that broadcasts subprocess output to all subscribers."""
     buffer = ""
     stalled_seconds = 0
+    has_progressed = False
     
     try:
         while process.returncode is None:
@@ -137,6 +138,7 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                     if mode == "livestream":
                         seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
                         if seg_match:
+                            has_progressed = True
                             all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
                             segments = sum(int(n) for n in all_nums)
                             is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
@@ -145,6 +147,7 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                     else:
                         dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+[\d.]+\S+\s+at\s+([~\d.]+\S+)\s+ETA\s+([~\d:]+)", line)
                         if dl_match:
+                            has_progressed = True
                             percent = float(dl_match.group(1))
                             job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
                             latest_event_data = {"percent": percent, "speed": dl_match.group(2).replace("~", ""), "eta": dl_match.group(3).replace("~", "")}
@@ -156,11 +159,20 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                     await asyncio.sleep(0.1)
 
             except asyncio.TimeoutError:
+                if has_progressed:
+                    # Once we have progress, we don't time out (could be long merge/copy)
+                    if job_id in subscribers:
+                        for q in subscribers[job_id]:
+                            await q.put(": ping\n\n")
+                    continue
+
                 stalled_seconds += 15
                 if stalled_seconds >= 120:
                     print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 120s. Terminating.\033[0m", flush=True)
                     process.terminate()
-                    job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": True}, save_to_disk=True)
+                    # Do not force cleanup_files=True for livestreams if they progressed
+                    is_livestream = (mode == "livestream")
+                    job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": not is_livestream}, save_to_disk=True)
                     if job_id in subscribers:
                         timeout_msg = f"data: {json.dumps({'error': 'Download stalled for 120s (Bot Block). Job terminated.'})}\n\n"
                         for q in subscribers[job_id]:
@@ -194,19 +206,29 @@ async def watch_job(job_id: str, process: asyncio.subprocess.Process):
 
     is_success = rc in [0, -2, 2, 130]
     temp_dir = current_job.get("temp_dir")
-    
-    if temp_dir and os.path.exists(temp_dir):
-        cleanup_requested = current_job.get("cleanup_files")
-        if cleanup_requested or is_success:
-            try:
-                shutil.rmtree(temp_dir)
-            except:
-                pass
+    is_livestream = current_job.get("mode") == "livestream"
 
+    # Determine final status
     final_status = "cancelled" if current_job.get("status") == "cancelled" else "done"
     if not is_success and final_status != "cancelled":
         final_status = "error"
         print(f"\033[91m[job:{job_id[:8]}] Process failed with code {rc}\033[0m", flush=True)
+
+    # Cleanup logic
+    if temp_dir and os.path.exists(temp_dir):
+        cleanup_requested = current_job.get("cleanup_files")
+
+        # If it's a livestream that did NOT succeed, preserve files and try to recover.
+        if is_livestream and not is_success and final_status != "cancelled":
+            print(f"[job:{job_id[:8]}] Livestream process ended unsuccessfully. Preserving temp files and attempting recovery.", flush=True)
+            asyncio.create_task(auto_recover_livestreams([job_id]))
+        # Otherwise, cleanup if success or if explicitly requested.
+        elif is_success or cleanup_requested:
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception as e:
+                print(f"[job:{job_id[:8]}] Error during temp dir cleanup: {e}", flush=True)
+
 
     job_manager.update_job(job_id, {"status": final_status, "pid": None}, save_to_disk=True)
     if job_id in job_manager.processes:
@@ -214,55 +236,102 @@ async def watch_job(job_id: str, process: asyncio.subprocess.Process):
 
 
 async def auto_recover_livestreams(job_ids: list[str]):
-    """Automatically trigger FFmpeg muxing for multiple interrupted livestreams."""
+    """
+    Automatically recover interrupted livestreams.
+    First, it checks for a large, pre-merged file to move. If not found, it
+    falls back to concatenating all .ts fragments using FFmpeg.
+    """
     for jid in job_ids:
         job = job_manager.get_job(jid)
         if not job: continue
 
         if job.get("mode") != "livestream":
             url = job.get("url", "Unknown URL")
-            print(f"\033[93m[System] WARNING: Video/Audio download was aborted unexpectedly: {jid[:8]} (URL: {url})\033[0m", flush=True)
+            print(f"\033[93m[System] WARNING: Non-livestream download was aborted: {jid[:8]} (URL: {url})\033[0m", flush=True)
             temp_dir = job.get("temp_dir")
             if temp_dir and os.path.exists(temp_dir):
                 try:
                     shutil.rmtree(temp_dir)
-                    print(f"[System] Cleaned up temporary files for aborted job: {jid[:8]}", flush=True)
+                    print(f"[System] Cleaned up temp files for aborted job: {jid[:8]}", flush=True)
                 except: pass
             continue
 
         print(f"[System] Attempting auto-recovery for interrupted livestream: {jid[:8]}", flush=True)
         try:
-            dl_path = get_config()["download_path"]
-            out_path = get_config()["output_path"]
-            target_dir = job.get("temp_dir") or dl_path
-            ts_files = sorted(Path(target_dir).glob("*.ts"))
+            cfg = get_config()
+            out_path = Path(cfg["output_path"])
+            target_dir = Path(job.get("temp_dir") or cfg["download_path"])
             
-            if not ts_files:
-                print(f"[System] No segments found for recovery: {jid[:8]}", flush=True)
+            # 1. Fast path: Look for an already-merged file from ytarchive
+            possible_merged_files = list(target_dir.glob("*.mp4")) + list(target_dir.glob("*.ts"))
+            large_files = [f for f in possible_merged_files if f.stat().st_size > 5_000_000] # > 5MB
+
+            if large_files:
+                merged_file = max(large_files, key=lambda f: f.stat().st_size)
+                output_file = out_path / f"[RECOVERED]_{merged_file.name}"
+                print(f"[System] Found pre-merged file: {merged_file.name}. Moving to outputs.", flush=True)
+                shutil.move(str(merged_file), str(output_file))
+                job_manager.update_job(jid, {"status": "done"}, save_to_disk=True)
+                # Cleanup the rest of the temp dir
+                shutil.rmtree(target_dir)
                 continue
 
-            output_file = f"{out_path}/[RECOVERED]_{jid[:8]}.mp4"
-            concat_file = Path(target_dir) / f"concat_recovery_{jid}.txt"
+            # 2. Slow path: Concatenate fragments with ffmpeg
+            ts_files = sorted(target_dir.glob("*.ts"))
+            if not ts_files:
+                print(f"[System] No segments found for recovery: {jid[:8]}", flush=True)
+                job_manager.update_job(jid, {"status": "error"}, save_to_disk=True)
+                continue
+
+            output_file = out_path / f"[RECOVERED]_{jid[:8]}.mp4"
+            concat_file = target_dir / f"concat_recovery_{jid}.txt"
+            
             with open(concat_file, "w") as f:
                 for ts in ts_files:
-                    # Pre-process path outside f-string to avoid SyntaxError
                     safe_path = str(ts.resolve()).replace("'", "'\\''")
                     f.write(f"file '{safe_path}'\n")
 
-            cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", output_file]
+            cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", str(output_file)]
             log_command(jid, cmd)
             process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            job_manager.update_job(jid, {"status": "running", "type": "finalize"}, save_to_disk=True)
+            job_manager.update_job(jid, {"status": "running", "type": "finalize", "pid": process.pid}, save_to_disk=True)
             job_manager.processes[jid] = process
             asyncio.create_task(watch_job(jid, process))
+
         except Exception as e:
             print(f"\033[91m[System] Recovery failed for {jid[:8]}: {e}\033[0m", flush=True)
+            job_manager.update_job(jid, {"status": "error"}, save_to_disk=True)
+
+
+async def cleanup_stale_temp_dirs():
+    """On startup, cleans up old, abandoned temporary job directories."""
+    print("[System] Running stale temp directory cleanup...", flush=True)
+    cfg = get_config()
+    download_path = Path(cfg.get("download_path"))
+    if not download_path.exists():
+        return
+
+    seven_days_ago = time.time() - (7 * 24 * 60 * 60)
+    active_job_dirs = {job.get("temp_dir") for job in job_manager.get_all_jobs().values() if job.get("temp_dir")}
+
+    for p in download_path.iterdir():
+        if p.is_dir() and p.name.startswith("job_"):
+            try:
+                if str(p) in active_job_dirs:
+                    continue
+                
+                if p.stat().st_mtime < seven_days_ago:
+                    print(f"[System] Deleting stale temp directory: {p.name}", flush=True)
+                    shutil.rmtree(p)
+            except Exception as e:
+                print(f"[System] Error cleaning up stale directory {p.name}: {e}", flush=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     asyncio.create_task(check_pot_connectivity())
     asyncio.create_task(checkpoint_saver())
+    asyncio.create_task(cleanup_stale_temp_dirs())
     to_recover = job_manager.cleanup_on_startup()
     if to_recover:
         asyncio.create_task(auto_recover_livestreams(to_recover))
