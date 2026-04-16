@@ -94,8 +94,14 @@ async def get_video_title(url: str, potoken: str, visitor_id: str) -> str:
     """Fast, non-blocking fetch of video title using tokens for reliability."""
     try:
         cmd = ["yt-dlp", "--get-title", "--js-runtimes", "node"]
+        cmd += ["--extractor-args", "youtubetab:skip=webpage"]
+        
+        y_args = "player_skip=webpage,configs"
         if potoken:
-            cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
+            y_args += f";po_token=web+{potoken}"
+        
+        cmd += ["--extractor-args", f"youtube:{y_args}"]
+        
         if visitor_id:
             cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
         cmd.append(url)
@@ -525,10 +531,18 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         cmd = ["yt-dlp", "--newline", "--js-runtimes", "node", "-f", QUALITY_MAP.get(quality, QUALITY_MAP["best"]), "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
         if reencode_audio == "true": cmd += ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
+        
+        # New optimized extractor arguments to bypass bot detection
+        cmd += ["--extractor-args", "youtubetab:skip=webpage"]
+        y_args = "player_skip=webpage,configs"
         if potoken:
-            cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
+            y_args += f";po_token=web+{potoken}"
+        cmd += ["--extractor-args", f"youtube:{y_args}"]
+        
+        # Pass visitor_id as a dedicated header, matching ytarchive's behavior
         if visitor_id:
             cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
+            
         if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
         cmd.append(url)
 
