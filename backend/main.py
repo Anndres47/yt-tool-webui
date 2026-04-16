@@ -90,15 +90,22 @@ async def checkpoint_saver():
             pass
 
 
-async def get_video_title(url: str) -> str:
-    """Fast, non-blocking fetch of video title."""
+async def get_video_title(url: str, potoken: str, visitor_id: str) -> str:
+    """Fast, non-blocking fetch of video title using tokens for reliability."""
     try:
+        cmd = ["yt-dlp", "--get-title", "--js-runtimes", "node"]
+        if potoken:
+            t = f"po_token=web+{potoken}"
+            # if visitor_id: t += f";visitor_data={visitor_id}"
+            cmd += ["--extractor-args", f"youtube:player-client=web;{t}"]
+        cmd.append(url)
+        
         process = await asyncio.create_subprocess_exec(
-            "yt-dlp", "--get-title", url,
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL
         )
-        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10.0)
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=15.0)
         return stdout.decode().strip() or "Unknown Title"
     except:
         return "Unknown Title"
@@ -477,7 +484,6 @@ async def api_library_stream(folder: str, filename: str, request: Request):
 async def api_download(url: str = Form(...), mode: str = Form(...), quality: str = Form("best"), reencode_audio: str = Form("false")):
     cfg = get_config()
     job_id = str(uuid.uuid4())
-    title = await get_video_title(url)
     potoken, visitor_id = "", ""
     
     # Logic: Livestream MUST have a token. Video/Audio can skip if configured.
@@ -490,6 +496,9 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
             potoken = cfg["potoken"].strip()
     else:
         print(f"[job:{job_id[:8]}] Skipping PO Token for {mode} (Disabled by user)", flush=True)
+
+    # Get title AFTER fetching token so we can use it
+    title = await get_video_title(url, potoken, visitor_id)
 
     if len([j for j in job_manager.get_all_jobs().values() if j.get("type") == "download" and j.get("status") == "running"]) >= 5:
         raise HTTPException(status_code=429, detail="Limit reached")
@@ -509,8 +518,8 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if reencode_audio == "true": cmd += ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         if potoken:
-            t = f"po_token={potoken}"
-            if visitor_id: t += f";visitor_data={visitor_id}"
+            t = f"po_token=web+{potoken}"
+            # if visitor_id: t += f";visitor_data={visitor_id}"
             cmd += ["--extractor-args", f"youtube:player-client=web;{t}"]
         if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
         cmd.append(url)
