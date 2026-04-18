@@ -20,8 +20,26 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import get_config, save_config
-from logger import log_command
+from logger import log_command, redact_cmd
 from jobs import JobManager
+
+
+def build_proxy_url(cfg: dict) -> Optional[str]:
+    """Helper to build a standard proxy URL from granular config."""
+    if not cfg.get("proxy_enabled") or not cfg.get("proxy_host"):
+        return None
+    
+    p_type = cfg.get("proxy_type", "socks5")
+    host = cfg.get("proxy_host")
+    port = cfg.get("proxy_port")
+    
+    if cfg.get("proxy_auth_enabled"):
+        user = cfg.get("proxy_username", "")
+        pw = cfg.get("proxy_password", "")
+        auth = f"{user}:{pw}@" if user or pw else ""
+        return f"{p_type}://{auth}{host}:{port}" if port else f"{p_type}://{auth}{host}"
+    
+    return f"{p_type}://{host}:{port}" if port else f"{p_type}://{host}"
 
 # Helper to fetch PO Token and Visitor Data from local sidecar
 async def get_auto_potoken() -> tuple[str, str]:
@@ -90,25 +108,26 @@ async def checkpoint_saver():
             pass
 
 
-async def get_video_title(url: str, potoken: str, visitor_id: str) -> str:
+async def get_video_title(url: str, potoken: str, visitor_id: str, proxy_url: str = None) -> str:
     """Fast, non-blocking fetch of video title using tokens for reliability."""
     try:
+        # SAFE MODE: complex arguments to bypass bot detection on bad IPs
+        # cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node"]
+        # cmd += ["--extractor-args", "youtubetab:skip=webpage"]
+        # y_args = ["player_client=default,-web,-web_safari", "player_skip=webpage,configs"]
+        # if potoken:
+        #     y_args.append(f"po_token=web+{potoken}")
+        # if visitor_id:
+        #     y_args.append(f"visitor_data={visitor_id}")
+        # cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
+        # if visitor_id:
+        #     cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
+
         cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node"]
-        cmd += ["--extractor-args", "youtubetab:skip=webpage"]
+        if proxy_url:
+            cmd += ["--proxy", proxy_url]
         
-        y_args = ["player_client=default,-web,-web_safari", "player_skip=webpage,configs"]
-        if potoken:
-            y_args.append(f"po_token=web+{potoken}")
-        if visitor_id:
-            y_args.append(f"visitor_data={visitor_id}")
-        
-        cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
-        
-        if visitor_id:
-            cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
-        cmd.append(url)
-        
-        print(f"[get_video_title] EXECUTING: {shlex.join(cmd)}", flush=True)
+        print(f"[get_video_title] EXECUTING: {redact_cmd(cmd)}", flush=True)
 
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -501,20 +520,19 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
     cfg = get_config()
     job_id = str(uuid.uuid4())
     potoken, visitor_id = "", ""
+    proxy_url = build_proxy_url(cfg)
     
     # Logic: Livestream MUST have a token. Video/Audio can skip if configured.
-    should_fetch_token = mode == "livestream" or not cfg.get("disable_ytdlp_potoken")
+    should_fetch_token = mode == "livestream" or cfg.get("enable_ytdlp_potoken")
     
     if should_fetch_token:
         if len(cfg.get("potoken", "").strip()) < 20:
             potoken, visitor_id = await get_auto_potoken()
         else:
             potoken = cfg["potoken"].strip()
-    else:
-        print(f"[job:{job_id[:8]}] Skipping PO Token for {mode} (Disabled by user)", flush=True)
 
     # Get title AFTER fetching token so we can use it
-    title = await get_video_title(url, potoken, visitor_id)
+    title = await get_video_title(url, potoken, visitor_id, proxy_url)
 
     if len([j for j in job_manager.get_all_jobs().values() if j.get("type") == "download" and j.get("status") == "running"]) >= 5:
         raise HTTPException(status_code=429, detail="Limit reached")
@@ -527,6 +545,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         if potoken: cmd += ["--potoken", potoken]
         if visitor_id: cmd += ["--visitor-data", visitor_id]
+        if proxy_url: cmd += ["--proxy", proxy_url]
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
         cmd += [url, quality]
     else:
@@ -534,25 +553,28 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if reencode_audio == "true": cmd += ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         
-        # New optimized extractor arguments to bypass bot detection
-        cmd += ["--extractor-args", "youtubetab:skip=webpage"]
-        
-        y_args = ["player_client=default,-web,-web_safari", "player_skip=webpage,configs"]
+        # SAFE MODE: complex arguments to bypass bot detection on bad IPs
+        # cmd += ["--extractor-args", "youtubetab:skip=webpage"]
+        # y_args = ["player_client=default,-web,-web_safari", "player_skip=webpage,configs"]
+        # if potoken:
+        #     y_args.append(f"po_token=web+{potoken}")
+        # if visitor_id:
+        #     y_args.append(f"visitor_data={visitor_id}")
+        # cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
+        # if visitor_id:
+        #     cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
+
         if potoken:
-            y_args.append(f"po_token=web+{potoken}")
-        if visitor_id:
-            y_args.append(f"visitor_data={visitor_id}")
-        
-        cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
-        
-        # Pass visitor_id as a dedicated header, matching ytarchive's behavior
+            cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
         if visitor_id:
             cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
+        if proxy_url:
+            cmd += ["--proxy", proxy_url]
             
         if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
         cmd.append(url)
 
-    print(f"[job:{job_id[:8]}] EXECUTING: {shlex.join(cmd)}", flush=True)
+    print(f"[job:{job_id[:8]}] EXECUTING: {redact_cmd(cmd)}", flush=True)
     log_command(job_id, cmd)
     process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     job_manager.add_job(job_id, {

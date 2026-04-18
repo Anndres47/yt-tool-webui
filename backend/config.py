@@ -20,8 +20,15 @@ DEFAULT_CONFIG = {
     "video_format": "mp4",
     "audio_format": "mp3",
     "reencode_audio_instant": False,
-    "disable_ytdlp_potoken": True,
+    "enable_ytdlp_potoken": False,
     "high_precision_cutter": False,
+    "proxy_enabled": False,
+    "proxy_type": "socks5",
+    "proxy_host": "",
+    "proxy_port": "",
+    "proxy_auth_enabled": False,
+    "proxy_username": "",
+    "proxy_password": "",
 }
 
 
