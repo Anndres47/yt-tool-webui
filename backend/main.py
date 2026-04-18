@@ -154,7 +154,9 @@ async def get_video_title(url: str, potoken: str, visitor_id: str, proxy_url: st
         # if visitor_id:
         #     cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
 
-        cmd = ["yt-dlp", url, "--get-title", "--no-playlist", "--no-cache-dir", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github"]
+        # Create a temp cache for the title fetcher to keep it isolated
+        t_cache = Path(os.environ.get("YTDL_DATA_PATH", "/app/data")) / "tmp" / f"cache_{uuid.uuid4().hex[:8]}"
+        cmd = ["yt-dlp", url, "--get-title", "--no-playlist", "--cache-dir", str(t_cache), "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github"]
         if potoken:
             cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
         if visitor_id:
@@ -278,18 +280,20 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                         last_broadcast = now
 
             except asyncio.TimeoutError:
+                # 1. Heartbeat: Keep UI connection alive regardless of progress
+                if job_id in subscribers:
+                    for q in subscribers[job_id]:
+                        await q.put(": ping\n\n")
+
+                # 2. Safety Shield: If we've seen progress, don't time out (livestreams/merges)
                 if has_progressed:
-                    # Once we have progress, we don't time out (could be long merge/copy)
-                    if job_id in subscribers:
-                        for q in subscribers[job_id]:
-                            await q.put(": ping\n\n")
                     continue
 
+                # 3. Watchdog: Kill jobs that never start (bot block/stuck proxy)
                 stalled_seconds += 15
                 if stalled_seconds >= 120:
                     print(f"\033[91m[job:{job_id[:8]}] TIMEOUT: No output for 120s. Terminating.\033[0m", flush=True)
                     process.terminate()
-                    # Do not force cleanup_files=True for livestreams if they progressed
                     is_livestream = (mode == "livestream")
                     job_manager.update_job(job_id, {"status": "cancelled", "cleanup_files": not is_livestream}, save_to_disk=True)
                     if job_id in subscribers:
@@ -297,11 +301,6 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                         for q in subscribers[job_id]:
                             await q.put(timeout_msg)
                     return
-
-                # Send heartbeats directly to all queues
-                if job_id in subscribers:
-                    for q in subscribers[job_id]:
-                        await q.put(": ping\n\n")
                 continue
     except Exception as e:
         print(f"Broadcaster error for {job_id}: {e}")
@@ -638,7 +637,8 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
     else:
         # Standard download logic (Video/Audio)
         fmt = "bestaudio/best" if mode == "audio" else QUALITY_MAP.get(quality, QUALITY_MAP["best"])
-        cmd = ["yt-dlp", "--newline", "--no-playlist", "--no-cache-dir", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", fmt, "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
+        # Use a per-job cache directory to allow session persistence (fixing 403s) without clashing
+        cmd = ["yt-dlp", "--newline", "--no-playlist", "--cache-dir", f"{job_temp_dir}/cache", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", fmt, "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
         
         if mode == "audio":
             cmd += ["-x"]
