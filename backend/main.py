@@ -605,7 +605,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
         cmd += [url, quality]
     else:
-        cmd = ["yt-dlp", "--newline", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", QUALITY_MAP.get(quality, QUALITY_MAP["best"]), "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
+        cmd = ["yt-dlp", "--newline", "--no-cache-dir", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", QUALITY_MAP.get(quality, QUALITY_MAP["best"]), "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
         if reencode_audio == "true": cmd += ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         
