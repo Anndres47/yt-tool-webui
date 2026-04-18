@@ -96,7 +96,7 @@ async def get_video_title(url: str, potoken: str, visitor_id: str) -> str:
         cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node"]
         cmd += ["--extractor-args", "youtubetab:skip=webpage"]
         
-        y_args = ["player_client=web,mweb,ios,safari,tv", "player_skip=webpage,configs"]
+        y_args = ["player_client=default,-web,-web_safari", "player_skip=webpage,configs"]
         if potoken:
             y_args.append(f"po_token=web+{potoken}")
         if visitor_id:
@@ -537,7 +537,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         # New optimized extractor arguments to bypass bot detection
         cmd += ["--extractor-args", "youtubetab:skip=webpage"]
         
-        y_args = ["player_client=web,mweb,ios,safari,tv", "player_skip=webpage,configs"]
+        y_args = ["player_client=default,-web,-web_safari", "player_skip=webpage,configs"]
         if potoken:
             y_args.append(f"po_token=web+{potoken}")
         if visitor_id:

@@ -181,7 +181,7 @@ const cfg = ref({
   video_format: 'mp4',
   audio_format: 'mp3',
   reencode_audio_instant: false,
-  disable_ytdlp_potoken: false,
+  disable_ytdlp_potoken: true,
   high_precision_cutter: false
 })
 const showAdvanced = ref(false)
