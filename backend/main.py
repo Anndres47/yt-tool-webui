@@ -109,7 +109,38 @@ async def checkpoint_saver():
 
 
 async def get_video_title(url: str, potoken: str, visitor_id: str, proxy_url: str = None) -> str:
-    """Fast, non-blocking fetch of video title using tokens for reliability."""
+    """Fetch video title. Tries a lightweight HTML fetch first, falls back to yt-dlp."""
+    # 1. Lightweight HTML fetch (Fastest, often bypasses bot walls)
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
+        # Simple urllib opener (supports HTTP proxies, SOCKS5 skipped for this light fetch)
+        if proxy_url and proxy_url.startswith("http"):
+            proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+            opener = urllib.request.build_opener(proxy_handler)
+        else:
+            opener = urllib.request.build_opener()
+        
+        def fetch():
+            req = urllib.request.Request(url, headers=headers)
+            with opener.open(req, timeout=5) as response:
+                html = response.read().decode('utf-8', errors='ignore')
+                m = re.search(r'<title>(.*?)</title>', html, re.IGNORECASE)
+                if m:
+                    t = m.group(1).replace(' - YouTube', '').strip()
+                    if t and t.lower() != "youtube":
+                        return t
+                return None
+        
+        simple_title = await asyncio.to_thread(fetch)
+        if simple_title:
+            from html import unescape
+            final_t = unescape(simple_title)
+            print(f"[get_video_title] Simple fetch success: {final_t}", flush=True)
+            return final_t
+    except Exception as e:
+        print(f"[get_video_title] Simple fetch failed: {e}", flush=True)
+
+    # 2. yt-dlp Fallback (Full extraction)
     try:
         # SAFE MODE: complex arguments to bypass bot detection on bad IPs
         # cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node"]
@@ -123,7 +154,7 @@ async def get_video_title(url: str, potoken: str, visitor_id: str, proxy_url: st
         # if visitor_id:
         #     cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
 
-        cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node", "--remote-components", "ejs:github"]
+        cmd = ["yt-dlp", url, "--get-title", "--no-playlist", "--no-cache-dir", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github"]
         if potoken:
             cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
         if visitor_id:
@@ -605,8 +636,15 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
         cmd += [url, quality]
     else:
-        cmd = ["yt-dlp", "--newline", "--no-cache-dir", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", QUALITY_MAP.get(quality, QUALITY_MAP["best"]), "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
-        if reencode_audio == "true": cmd += ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
+        # Standard download logic (Video/Audio)
+        fmt = "bestaudio/best" if mode == "audio" else QUALITY_MAP.get(quality, QUALITY_MAP["best"])
+        cmd = ["yt-dlp", "--newline", "--no-playlist", "--no-cache-dir", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", fmt, "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
+        
+        if mode == "audio":
+            cmd += ["-x"]
+            if reencode_audio == "true": 
+                cmd += ["--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
+        
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         
         # SAFE MODE: complex arguments to bypass bot detection on bad IPs
