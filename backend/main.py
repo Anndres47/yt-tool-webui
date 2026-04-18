@@ -154,6 +154,9 @@ async def get_video_title(url: str, potoken: str, visitor_id: str, proxy_url: st
 # job_id -> list of asyncio.Queue
 subscribers: dict[str, list[asyncio.Queue]] = {}
 
+# ANSI escape sequence stripper for cleaner regex matching
+ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
 async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mode: str):
     """Single reader task that broadcasts subprocess output to all subscribers."""
     buffer = ""
@@ -176,38 +179,44 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                 lines = re.split(r"[\r\n]+", buffer)
                 buffer = lines.pop() if lines else ""
                 
+                latest_event_data = None
                 for line in lines:
-                    line = line.strip()
-                    if not line: continue
+                    # Strip ANSI codes and whitespace for robust matching
+                    clean_line = ANSI_ESCAPE.sub('', line).strip()
+                    if not clean_line: continue
                     
-                    print(f"[job:{job_id[:8]}] {line}", flush=True)
+                    print(f"[job:{job_id[:8]}] {clean_line}", flush=True)
                     
-                    latest_event_data = None
                     if mode == "livestream":
-                        seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
+                        seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", clean_line, re.IGNORECASE)
                         if seg_match:
                             has_progressed = True
-                            all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
+                            all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", clean_line, re.IGNORECASE)
                             segments = sum(int(n) for n in all_nums)
-                            is_live = any(word in line.lower() for word in ["live", "up to date", "current"])
+                            is_live = any(word in clean_line.lower() for word in ["live", "up to date", "current"])
                             job_manager.update_job(job_id, {"segments": segments, "is_live": is_live}, save_to_disk=False)
                             latest_event_data = {"live": is_live, "segments": segments, "mode": "livestream"}
                     else:
-                        dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+[\d.]+\S+\s+at\s+([~\d.]+\S+)\s+ETA\s+([~\d:]+)", line)
+                        # Robust regex: handles varying spaces, tildes, and missing ETA/Speed
+                        dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+([~\d.]+\S+)(?:\s+at\s+([~\d.]+\S+))?(?:\s+ETA\s+([~\d:]+))?", clean_line)
                         if dl_match:
                             has_progressed = True
                             percent = float(dl_match.group(1))
                             job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
-                            latest_event_data = {"percent": percent, "speed": dl_match.group(2).replace("~", ""), "eta": dl_match.group(3).replace("~", "")}
+                            latest_event_data = {
+                                "percent": percent, 
+                                "speed": (dl_match.group(3) or "").replace("~", ""), 
+                                "eta": (dl_match.group(4) or "").replace("~", "")
+                            }
 
-                    # Throttle broadcasts to ~10 FPS for UI smoothness
-                    if latest_event_data and job_id in subscribers:
-                        now = time.time()
-                        if now - last_broadcast > 0.1 or mode == "livestream":
-                            msg = f"data: {json.dumps(latest_event_data)}\n\n"
-                            for q in subscribers[job_id]:
-                                await q.put(msg)
-                            last_broadcast = now
+                # Send the most recent progress update from this chunk
+                if latest_event_data and job_id in subscribers:
+                    now = time.time()
+                    if now - last_broadcast > 0.1 or mode == "livestream":
+                        msg = f"data: {json.dumps(latest_event_data)}\n\n"
+                        for q in subscribers[job_id]:
+                            await q.put(msg)
+                        last_broadcast = now
 
             except asyncio.TimeoutError:
                 if has_progressed:
