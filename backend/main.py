@@ -188,14 +188,27 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                     print(f"[job:{job_id[:8]}] {clean_line}", flush=True)
                     
                     if mode == "livestream":
-                        seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", clean_line, re.IGNORECASE)
-                        if seg_match:
+                        # Improved regex: specifically look for Video Fragments as the primary progress indicator
+                        # Also handles the generic "Segments: X" format
+                        if "Video Fragments" in clean_line or "Segments" in clean_line:
                             has_progressed = True
-                            all_nums = re.findall(r"(?:Segments|Fragments):\s*(\d+)", clean_line, re.IGNORECASE)
-                            segments = sum(int(n) for n in all_nums)
-                            is_live = any(word in clean_line.lower() for word in ["live", "up to date", "current"])
-                            job_manager.update_job(job_id, {"segments": segments, "is_live": is_live}, save_to_disk=False)
-                            latest_event_data = {"live": is_live, "segments": segments, "mode": "livestream"}
+                            # Find all fragment/segment numbers in the line
+                            all_nums = re.findall(r"(?:Fragments|Segments|frags):\s*(\d+)", clean_line, re.IGNORECASE)
+                            if all_nums:
+                                # If both V and A are present, sum them for "Total chunks"
+                                # but if just one is present, use that.
+                                segments = sum(int(n) for n in all_nums)
+                                is_live = any(word in clean_line.lower() for word in ["live", "up to date", "current"])
+                                job_manager.update_job(job_id, {"segments": segments, "is_live": is_live}, save_to_disk=False)
+                                latest_event_data = {"live": is_live, "segments": segments, "mode": "livestream"}
+                                
+                                # Always broadcast livestream updates immediately to keep UI active
+                                if job_id in subscribers:
+                                    msg = f"data: {json.dumps(latest_event_data)}\n\n"
+                                    for q in subscribers[job_id]:
+                                        await q.put(msg)
+                                    last_broadcast = time.time()
+                                    latest_event_data = None # Prevent double-broadcast below
                     else:
                         # Robust regex: handles varying spaces, tildes, and missing ETA/Speed
                         dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+([~\d.]+\S+)(?:\s+at\s+([~\d.]+\S+))?(?:\s+ETA\s+([~\d:]+))?", clean_line)
