@@ -11,16 +11,21 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
   - **Quality Selector** — choose from Best, 1080p, 720p, etc. for videos.
   - **Audio Mode** — download best audio stream, with optional re-encoding to MP3.
   - **Livestream Support** — track catch-up progress and mux segments on completion.
+  - **Configurable Proxy** — built-in SOCKS4/5 and HTTP proxy support with credential redaction in logs.
 - **Robust YouTube Access:**
-  - **Automated PO Tokens & Visitor ID** — automatically fetches and applies the necessary credentials to bypass YouTube's strictest bot-detection.
-  - **Bundled JS Runtime** — includes a Node.js runtime for `yt-dlp` to correctly process modern YouTube pages.
+  - **Automated PO Tokens & Visitor ID** — integrated with a `pot-provider` sidecar to bypass YouTube's strictest bot-detection.
+  - **Toggleable PO Token** — optionally enable PO tokens for standard downloads to balance speed and reliability.
+  - **Robust HTML Title Fetching** — a lightweight, secondary title scraper that bypasses bot detection for near-instant metadata retrieval.
+  - **JS Challenge Solving** — automatically solves YouTube JS challenges via Node.js and remote components for full-speed downloads.
+  - **Session Isolation** — uses per-job cache directories to prevent session clashing and fix HTTP 403 Forbidden errors on concurrent or long downloads.
 - **Advanced FFmpeg Cutter:**
   - **Instant Cut** — use stream copy (`-c:v copy`) for near-instant, lossless results.
   - **Full Re-encode** — optional transcoding for maximum device compatibility.
+  - **Smart Slider UX** — Start and End sliders automatically push each other to maintain valid selections; sliders reset perfectly on new file load.
   - **High-Precision Mode** — an advanced setting unlocks secondary sliders for centisecond-accurate cuts.
   - **Library & Upload Support** — cut from finished downloads or directly upload a file.
 - **Intelligent Job & System Management:**
-  - **Real-time Progress** — track all jobs via independent cards with progress, speed, and ETA.
+  - **Smooth Real-time Progress** — track all jobs via independent cards with high-frequency (10 FPS) smooth progress updates.
   - **Dynamic Timeout Watchdog** — a smart timeout kills legitimately stalled jobs but allows long post-processing tasks to finish.
   - **Automatic Recovery & Cleanup** — failed livestreams are automatically recovered. Stale temp files are cleaned up on startup.
   - **Persistent State** — jobs list and UI state are preserved across browser refreshes and server restarts.
@@ -55,6 +60,7 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Video and audio downloads from YouTube |
 | [ytarchive](https://github.com/dreammu/ytarchive) | Livestream recording (custom fork with `--visitor-data` support) |
 | [ffmpeg](https://github.com/FFmpeg/FFmpeg) | Video/audio cutting and audio re-encoding |
+| [pot-provider](https://github.com/brainicism/bgutil-ytdlp-pot-provider) | Sidecar service for automated PO Token generation |
 
 ---
 
@@ -142,6 +148,8 @@ All settings are available in the **Settings** tab of the UI.
 | Audio format | `mp3` | Default output extension for audio cuts (MP3, M4A, WAV, FLAC, Opus). |
 | Re-encode Audio Instant | `false` | If true, forces AAC audio re-encoding during Instant Cuts for better compatibility. |
 | High Precision Cutter | `false` | If true, enables secondary sliders in the Cutter for centisecond precision. |
+| Enable PO Token | `false` | If true, applies PO tokens to standard `yt-dlp` downloads (always used for livestreams). |
+| Proxy Support | `false` | Enable/Disable global proxy. Supports SOCKS4, SOCKS5, and HTTP with authentication. |
 
 ### Using cookies
 
