@@ -245,6 +245,7 @@ onMounted(async () => {
         activeJobId = id
         cutting.value = true
         cutPercent.value = job.percent || 0
+        outputName.value = job.name || ''
         listenToCut(id)
         break
       }

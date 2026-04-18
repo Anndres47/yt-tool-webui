@@ -209,6 +209,21 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                                         await q.put(msg)
                                     last_broadcast = time.time()
                                     latest_event_data = None # Prevent double-broadcast below
+                    elif mode == "ffmpeg":
+                        # FFmpeg progress: frame= 123 ... time=00:00:05.12 ...
+                        time_match = re.search(r"time=(\d+:\d+:\d+\.\d+)", clean_line)
+                        if time_match:
+                            has_progressed = True
+                            cur_time_str = time_match.group(1)
+                            # Convert HH:MM:SS.ms to seconds
+                            h, m, s = cur_time_str.split(':')
+                            cur_sec = int(h)*3600 + int(m)*60 + float(s)
+                            
+                            duration = job_manager.get_job(job_id).get("duration_s", 0)
+                            if duration > 0:
+                                percent = min(100.0, round((cur_sec / duration) * 100, 1))
+                                job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
+                                latest_event_data = {"percent": percent}
                     else:
                         # Robust regex: handles varying spaces, tildes, and missing ETA/Speed
                         dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+([~\d.]+\S+)(?:\s+at\s+([~\d.]+\S+))?(?:\s+ETA\s+([~\d:]+))?", clean_line)
@@ -713,7 +728,8 @@ async def api_ffmpeg_cut(start: str = Form(...), end: str = Form(...), name: str
     process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     jid = str(uuid.uuid4())
     job_manager.add_job(jid, {"type": "ffmpeg", "duration_s": float(duration_s), "output": output_file, "name": name, "status": "running"}, process=process)
-    # Start the single-output broadcaster for ffmpeg too
+    # Start the watcher and broadcaster
+    asyncio.create_task(watch_job(jid, process))
     asyncio.create_task(broadcast_output(jid, process, "ffmpeg"))
     return {"job_id": jid}
 
