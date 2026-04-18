@@ -574,7 +574,8 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
     job_temp_dir.mkdir(parents=True, exist_ok=True)
 
     if mode == "livestream":
-        cmd = ["ytarchive", "--newline", "--merge", "-td", str(job_temp_dir), "-o", f"{cfg['output_path']}/{{id}}"]
+        safe_title = re.sub(r'[^\w\-\. ]', '_', title).strip() if title and title != "Unknown Title" else job_id[:8]
+        cmd = ["ytarchive", "--newline", "--merge", "-td", str(job_temp_dir), "-o", f"{cfg['output_path']}/{safe_title}"]
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         if potoken: cmd += ["--potoken", potoken]
         if visitor_id: cmd += ["--visitor-data", visitor_id]
