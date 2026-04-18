@@ -286,6 +286,11 @@ function onLibrarySelect() {
   previewSrc.value = `/api/library/stream/${libraryFile.value}`
   const fname = libraryFile.value.split('/').pop()
   outputName.value = fname.slice(0, fname.lastIndexOf('.')) + '_clip'
+  // Reset sliders
+  startTime.value = 0
+  startTimeCs.value = 0
+  endTime.value = 0
+  endTimeCs.value = 0
 }
 
 function onFileUpload(event) {
@@ -302,12 +307,19 @@ function onFileUpload(event) {
   previewObjectUrl.value = URL.createObjectURL(file)
   previewSrc.value = previewObjectUrl.value
   outputName.value = file.name.slice(0, file.name.lastIndexOf('.')) + '_clip'
+  // Reset sliders
+  startTime.value = 0
+  startTimeCs.value = 0
+  endTime.value = 0
+  endTimeCs.value = 0
 }
 
 function onMetadata() {
   if (!mediaEl.value) return
   duration.value = mediaEl.value.duration || 0
+  // Default end to end of video
   endTime.value = duration.value
+  endTimeCs.value = Math.round((duration.value - Math.floor(duration.value)) * 100)
 }
 
 function seekMedia(t) {
