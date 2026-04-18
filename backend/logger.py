@@ -12,7 +12,8 @@ def redact_cmd(cmd: list[str]) -> str:
     """Join command and redact passwords from proxy URLs."""
     cmd_str = shlex.join(cmd)
     # Match type://user:PASSWORD@host and replace PASSWORD with ***
-    return re.sub(r'(://[^:]+:)([^@]+)(@)', r'\1***\3', cmd_str)
+    # Restrict to non-space and non-slash characters to avoid matching across arguments or URL paths
+    return re.sub(r'(://[^: /]+:)([^@ /]+)(@)', r'\1***\3', cmd_str)
 
 
 def log_command(job_id: str, cmd: list[str]):

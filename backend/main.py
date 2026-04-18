@@ -124,6 +124,10 @@ async def get_video_title(url: str, potoken: str, visitor_id: str, proxy_url: st
         #     cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
 
         cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node"]
+        if potoken:
+            cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
+        if visitor_id:
+            cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
         if proxy_url:
             cmd += ["--proxy", proxy_url]
         
