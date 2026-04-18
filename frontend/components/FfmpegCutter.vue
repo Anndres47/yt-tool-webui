@@ -70,7 +70,7 @@
           <div>
             <div class="scrubber-label">
               <span>Start</span>
-              <span class="scrubber-time">{{ fmtTime(startTime) }}</span>
+              <span class="scrubber-time">{{ fmtTime(finalStartTime) }}</span>
             </div>
             <input
               type="range"
@@ -78,9 +78,13 @@
               min="0"
               :max="duration"
               step="0.1"
-              @input="seekMedia(startTime)"
+              @input="seekMedia(finalStartTime)"
               :disabled="cutting"
             />
+            <div v-if="settings.high_precision_cutter" class="fine-tune-cs">
+              <input type="range" v-model.number="startTimeCs" min="0" max="99" step="1" @input="seekMedia(finalStartTime)" :disabled="cutting" />
+              <span class="cs-label">.{{ startTimeCs.toString().padStart(2, '0') }}</span>
+            </div>
             <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('start')" :disabled="cutting">
               Set from playhead
             </button>
@@ -88,7 +92,7 @@
           <div>
             <div class="scrubber-label">
               <span>End</span>
-              <span class="scrubber-time">{{ fmtTime(endTime) }}</span>
+              <span class="scrubber-time">{{ fmtTime(finalEndTime) }}</span>
             </div>
             <input
               type="range"
@@ -96,9 +100,13 @@
               min="0"
               :max="duration"
               step="0.1"
-              @input="seekMedia(endTime)"
+              @input="seekMedia(finalEndTime)"
               :disabled="cutting"
             />
+            <div v-if="settings.high_precision_cutter" class="fine-tune-cs">
+              <input type="range" v-model.number="endTimeCs" min="0" max="99" step="1" @input="seekMedia(finalEndTime)" :disabled="cutting" />
+              <span class="cs-label">.{{ endTimeCs.toString().padStart(2, '0') }}</span>
+            </div>
             <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px;margin-top:4px" @click="setFromCurrent('end')" :disabled="cutting">
               Set from playhead
             </button>
@@ -106,8 +114,8 @@
         </div>
 
         <!-- Duration callout -->
-        <div v-if="endTime > startTime" style="font-size:11px;color:var(--muted);margin-bottom:4px">
-          Clip duration: <span style="color:var(--accent)">{{ fmtTime(endTime - startTime) }}</span>
+        <div v-if="clipDuration > 0" style="font-size:11px;color:var(--muted);margin-bottom:4px">
+          Clip duration: <span style="color:var(--accent)">{{ fmtTime(clipDuration) }}</span>
         </div>
       </template>
     </div>
@@ -182,7 +190,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import axios from 'axios'
 
 const sourceTab = ref('library')
@@ -193,9 +201,12 @@ const previewSrc = ref('')
 const previewObjectUrl = ref('')
 const mediaEl = ref(null)
 
+const settings = ref({ high_precision_cutter: false })
 const duration = ref(0)
 const startTime = ref(0)
 const endTime = ref(0)
+const startTimeCs = ref(0)
+const endTimeCs = ref(0)
 const outputName = ref('')
 const reencodeFull = ref(false)
 
@@ -213,7 +224,34 @@ const isVideoFile = computed(() => {
   return !AUDIO_EXT.has(ext)
 })
 
-onMounted(loadLibrary)
+const finalStartTime = computed(() => startTime.value + (startTimeCs.value / 100))
+const finalEndTime = computed(() => endTime.value + (endTimeCs.value / 100))
+const clipDuration = computed(() => {
+  const d = finalEndTime.value - finalStartTime.value
+  return d > 0 ? d : 0
+})
+
+onMounted(async () => {
+  loadLibrary()
+  try {
+    const [jobsRes, settingsRes] = await Promise.all([
+      axios.get('/api/jobs'),
+      axios.get('/api/settings')
+    ])
+    settings.value = settingsRes.data
+    const jobs = jobsRes.data
+    for (const [id, job] of Object.entries(jobs)) {
+      if (job.type === 'ffmpeg' && job.status === 'running') {
+        activeJobId = id
+        cutting.value = true
+        cutPercent.value = job.percent || 0
+        outputName.value = job.name || ''
+        listenToCut(id)
+        break
+      }
+    }
+  } catch (_) {}
+})
 
 async function loadLibrary() {
   try {
@@ -238,17 +276,21 @@ function clearPreview() {
   duration.value = 0
   startTime.value = 0
   endTime.value = 0
+  startTimeCs.value = 0
+  endTimeCs.value = 0
 }
 
 function onLibrarySelect() {
   if (!libraryFile.value) { clearPreview(); return }
   if (previewObjectUrl.value) { URL.revokeObjectURL(previewObjectUrl.value); previewObjectUrl.value = '' }
-  // libraryFile is "folder/filename"
   previewSrc.value = `/api/library/stream/${libraryFile.value}`
-  
-  // Set default output name
   const fname = libraryFile.value.split('/').pop()
   outputName.value = fname.slice(0, fname.lastIndexOf('.')) + '_clip'
+  // Reset sliders
+  startTime.value = 0
+  startTimeCs.value = 0
+  endTime.value = 0
+  endTimeCs.value = 0
 }
 
 function onFileUpload(event) {
@@ -264,15 +306,24 @@ function onFileUpload(event) {
   if (previewObjectUrl.value) URL.revokeObjectURL(previewObjectUrl.value)
   previewObjectUrl.value = URL.createObjectURL(file)
   previewSrc.value = previewObjectUrl.value
-  
-  // Set default output name
   outputName.value = file.name.slice(0, file.name.lastIndexOf('.')) + '_clip'
+  // Reset sliders
+  startTime.value = 0
+  startTimeCs.value = 0
+  endTime.value = 0
+  endTimeCs.value = 0
 }
 
-function onMetadata() {
+async function onMetadata() {
   if (!mediaEl.value) return
   duration.value = mediaEl.value.duration || 0
+  
+  // Wait for DOM to update slider 'max' before setting value
+  await nextTick()
+  
+  // Default end to end of video
   endTime.value = duration.value
+  endTimeCs.value = Math.round((duration.value - Math.floor(duration.value)) * 100)
 }
 
 function seekMedia(t) {
@@ -282,16 +333,43 @@ function seekMedia(t) {
 function setFromCurrent(which) {
   if (!mediaEl.value) return
   const t = mediaEl.value.currentTime
-  if (which === 'start') startTime.value = Math.min(t, endTime.value)
-  else endTime.value = Math.max(t, startTime.value)
+  if (which === 'start') {
+    startTime.value = Math.floor(t)
+    startTimeCs.value = Math.round((t - Math.floor(t)) * 100)
+    // If start moves past end, push end forward by 10s to keep selection valid
+    if (finalStartTime.value >= finalEndTime.value) {
+      const newEnd = Math.min(finalStartTime.value + 10, duration.value)
+      endTime.value = Math.floor(newEnd)
+      endTimeCs.value = Math.round((newEnd - Math.floor(newEnd)) * 100)
+    }
+  } else {
+    // Allow setting End (B) freely anywhere. 
+    // Validation in cut() will handle A > B cases.
+    endTime.value = Math.floor(t)
+    endTimeCs.value = Math.round((t - Math.floor(t)) * 100)
+  }
+}
+
+function toTimestamp(s) {
+  const h = Math.floor(s / 3600).toString().padStart(2, '0')
+  const m = Math.floor((s % 3600) / 60).toString().padStart(2, '0')
+  const sec = Math.floor(s % 60).toString().padStart(2, '0')
+  const cs = Math.round((s - Math.floor(s)) * 100).toString().padStart(2, '0')
+  return `${h}:${m}:${sec}.${cs}`
 }
 
 function fmtTime(s) {
-  if (!isFinite(s) || s < 0) return '0:00'
+  if (!isFinite(s) || s < 0) return settings.value.high_precision_cutter ? '0:00.00' : '0:00'
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)
   const sec = Math.floor(s % 60).toString().padStart(2, '0')
-  return h > 0 ? `${h}:${m.toString().padStart(2,'0')}:${sec}` : `${m}:${sec}`
+  const base = h > 0 ? `${h}:${m.toString().padStart(2,'0')}:${sec}` : `${m}:${sec}`
+  
+  if (settings.value.high_precision_cutter) {
+    const cs = Math.round((s - Math.floor(s)) * 100).toString().padStart(2, '0')
+    return `${base}.${cs}`
+  }
+  return base
 }
 
 function formatSize(bytes) {
@@ -313,7 +391,7 @@ async function cancelCut() {
 
 async function cut() {
   if (!previewSrc.value || !outputName.value.trim()) return
-  if (startTime.value >= endTime.value) {
+  if (finalStartTime.value >= finalEndTime.value) {
     cutMsg.value = { type: 'error', text: 'Start time must be less than end time.' }
     return
   }
@@ -322,15 +400,21 @@ async function cut() {
   cutPercent.value = 0
   cutMsg.value = null
 
-  const cutDuration = endTime.value - startTime.value
-
   try {
     const form = new FormData()
-    form.append('start', startTime.value.toString())
-    form.append('end', endTime.value.toString())
+    let startVal = finalStartTime.value
+    let endVal = finalEndTime.value
+
+    if (settings.value.high_precision_cutter) {
+      startVal = toTimestamp(startVal)
+      endVal = toTimestamp(endVal)
+    }
+
+    form.append('start', startVal.toString())
+    form.append('end', endVal.toString())
     form.append('name', outputName.value)
     form.append('reencode_full', reencodeFull.value ? 'true' : 'false')
-    form.append('duration_s', cutDuration.toString())
+    form.append('duration_s', clipDuration.value.toString())
 
     if (sourceTab.value === 'library') {
       form.append('library_path', libraryFile.value)
@@ -341,39 +425,42 @@ async function cut() {
     const res = await axios.post('/api/ffmpeg/cut', form)
     const jobId = res.data.job_id
     activeJobId = jobId
-
-    eventSource = new EventSource(`/api/ffmpeg/progress/${jobId}`)
-    eventSource.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-      if (data.error) {
-        cutMsg.value = { type: 'error', text: data.error }
-        cutting.value = false
-        eventSource?.close()
-        eventSource = null
-        return
-      }
-      if (data.done) {
-        cutPercent.value = 100
-        cutMsg.value = { type: 'success', text: `Saved to: ${data.output}` }
-        cutting.value = false
-        eventSource?.close()
-        eventSource = null
-        loadLibrary()
-        return
-      }
-      if (data.percent !== undefined) cutPercent.value = data.percent
-    }
-    eventSource.onerror = () => {
-      if (cutting.value) {
-        cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
-        cutting.value = false
-        eventSource?.close()
-        eventSource = null
-      }
-    }
+    listenToCut(jobId)
   } catch (err) {
     cutMsg.value = { type: 'error', text: err.response?.data?.detail ?? err.message }
     cutting.value = false
+  }
+}
+
+function listenToCut(jobId) {
+  eventSource = new EventSource(`/api/ffmpeg/progress/${jobId}`)
+  eventSource.onmessage = (e) => {
+    const data = JSON.parse(e.data)
+    if (data.error) {
+      cutMsg.value = { type: 'error', text: data.error }
+      cutting.value = false
+      eventSource?.close()
+      eventSource = null
+      return
+    }
+    if (data.done) {
+      cutPercent.value = 100
+      cutMsg.value = { type: 'success', text: `Saved to: ${data.output}` }
+      cutting.value = false
+      eventSource?.close()
+      eventSource = null
+      loadLibrary()
+      return
+    }
+    if (data.percent !== undefined) cutPercent.value = data.percent
+  }
+  eventSource.onerror = () => {
+    if (cutting.value) {
+      cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
+      cutting.value = false
+      eventSource?.close()
+      eventSource = null
+    }
   }
 }
 </script>

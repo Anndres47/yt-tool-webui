@@ -91,11 +91,12 @@
         <div class="task-header">
           <div class="task-info">
             <span class="task-mode-badge">{{ task.mode }}</span>
+            <div v-if="task.title" class="task-title">{{ task.title }}</div>
             <span class="task-url">{{ task.url }}</span>
           </div>
           <button 
             v-if="!task.done && !task.showCancelConfirm" 
-            class="btn btn-ghost btn-sm" 
+            class="btn btn-danger btn-sm" 
             @click="promptCancel(task)"
           >
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
@@ -108,18 +109,22 @@
         <!-- Inline Cancel Confirmation -->
         <div v-if="task.showCancelConfirm" class="msg msg-info task-cancel-dialog">
           <template v-if="task.mode === 'livestream'">
-            <div style="font-size:11px;margin-bottom:8px">Keep segments and mux, or delete all?</div>
-            <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
-              <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
-              <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
-              <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">Back</button>
+            <div class="cancel-row">
+              <span class="cancel-text">Keep &amp; Mux or Delete All?</span>
+              <div class="btn-row-right">
+                <button class="btn btn-primary btn-xs" @click="cancelTask(task, false)">Keep &amp; Mux</button>
+                <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Delete All</button>
+                <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">Back</button>
+              </div>
             </div>
           </template>
           <template v-else>
-            <div style="font-size:11px;margin-bottom:8px">Cancel download?</div>
-            <div class="btn-row" style="justify-content: flex-start; gap: 8px;">
-              <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
-              <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">No</button>
+            <div class="cancel-row">
+              <span class="cancel-text">Are you sure you want to cancel?</span>
+              <div class="btn-row-right">
+                <button class="btn btn-danger btn-xs" @click="cancelTask(task, true)">Yes, Cancel</button>
+                <button class="btn btn-ghost btn-xs" @click="clearCancelTimer(task); task.showCancelConfirm = false">No</button>
+              </div>
             </div>
           </template>
         </div>
@@ -201,12 +206,13 @@ function addTaskFromJob(id, job) {
   const task = {
     id,
     url: job.url || 'Unknown source',
+    title: job.title || '',
     mode: job.mode || 'video',
-    percent: 0,
+    percent: job.percent || 0,
     speed: '',
     eta: '',
-    isLive: false,
-    segments: 0,
+    isLive: !!job.is_live,
+    segments: job.segments || 0,
     msg: null,
     showCancelConfirm: false,
     cancelTimer: null, // Timer for auto-dismiss
@@ -257,6 +263,7 @@ const startDownload = async () => {
     const task = {
       id: jobId,
       url: taskUrl,
+      title: '', // Will be updated via the jobs API on next refresh
       mode: taskMode,
       percent: 0,
       speed: '',
@@ -293,10 +300,12 @@ function listenToJob(task) {
     if (data.error) {
       task.msg = { type: 'error', text: data.error }
       cleanupTask(task)
-      // Auto-hide error after 5 seconds
-      setTimeout(() => {
-        removeTask(task.id)
-      }, 5000)
+      // Only auto-hide if it's a fatal termination error
+      if (!data.retry) {
+        setTimeout(() => {
+          removeTask(task.id)
+        }, 5000)
+      }
       return
     }
     if (data.done) {
@@ -324,12 +333,10 @@ function listenToJob(task) {
 
   es.onerror = () => {
     if (!task.done && !task.msg) {
-      task.msg = { type: 'error', text: 'Connection lost.' }
+      task.msg = { type: 'error', text: 'Connection lost. Refresh to reconnect.' }
       cleanupTask(task)
-      // Auto-hide after 5 seconds
-      setTimeout(() => {
-        removeTask(task.id)
-      }, 5000)
+      // WE NO LONGER removeTask here. This prevents the card from disappearing
+      // while the background process is actually still running.
     }
   }
 }
@@ -391,6 +398,12 @@ function removeTask(id) {
   color: var(--accent);
   font-weight: 700;
 }
+.task-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.2;
+}
 .task-url {
   font-size: 12px;
   color: var(--text);
@@ -414,7 +427,22 @@ function removeTask(id) {
 }
 .task-cancel-dialog {
   margin: 10px 0;
-  padding: 8px 12px;
+  padding: 6px 12px;
+}
+.cancel-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+.cancel-text {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn-row-right {
+  display: flex;
+  gap: 6px;
 }
 .btn-xs {
   padding: 4px 8px;

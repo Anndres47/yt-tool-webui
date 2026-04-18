@@ -10,9 +10,12 @@ services:
       - ./downloads:/app/downloads
       - ./outputs:/app/outputs
     environment:
+      - TZ=America/Mexico_City
       - YTDL_DATA_PATH=/app/data
       - YTDL_DOWNLOAD_PATH=/app/downloads
       - YTDL_OUTPUT_PATH=/app/outputs
+    depends_on:
+      - pot-provider
     restart: unless-stopped
 
   pot-provider:

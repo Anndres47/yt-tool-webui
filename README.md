@@ -6,31 +6,33 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 
 ## Features
 
-- **Multi-Download System** — download up to **5 concurrent** videos, livestreams, or audio files simultaneously.
-- **Task Cards** — each download is managed via an independent card showing real-time progress, speed, and ETA.
-- **Auto-Hide** — successful downloads automatically disappear from the list after 3 seconds to keep your UI clean.
-- **Concurrency Protection** — the UI proactively blocks new downloads and shows a disclaimer when the 5-job limit is reached.
-- **Quality selector** for video: Best, 1080p, 720p, 480p, 360p
-- **Audio mode** — download best audio stream, optionally re-encode to MP3 320kbps via ffmpeg
-- **Livestream support** — tracks catch-up progress, shows segment count, and pulses when live; Abort & Save automatically muxes segments using the `--merge` flag.
-- **Real-time progress bars** — SSE progress for downloads and real-time segment tracking for streams.
-- **FFmpeg Cutter** — trim any video or audio file.
-  - **Instant Cut** — use stream copy (`-c:v copy`) for near-instant results with zero quality loss.
-  - **Full Re-encode (Slow)** — optional transcoding to H.264/AAC for maximum compatibility across all devices.
-  - **Configurable Defaults** — set your preferred video (MP4, MKV, etc.) and audio (MP3, M4A, FLAC, etc.) formats in the Settings tab.
-  - **Smart Codec Selection** — the cutter automatically selects the best encoder if the source format differs from your configured default.
-  - **Optional Audio Re-encode** — a toggle in Advanced Settings allows forcing AAC audio re-encoding during Instant Cuts to ensure maximum player compatibility (fixes Windows Media Player silence) without slowing down the video slicing.
-  - **Library picker** — select files from `outputs/` or `outputs/ffmpeg/`, streamed via HTTP range requests.
-  - **Native video preview** — seek and set cut points from the playhead.
-- **Surgical Cleanup** — each download runs in a unique temp directory; cancelling a video download wipes only that specific job's leftovers.
-- **Filename Sanitization** — output names are automatically cleaned; spaces are replaced with underscores (`_`) for better filesystem compatibility.
-- **Settings panel** — configure Data, Download (temp), and Output paths directly from the UI.
-- **Advanced Settings** — pass custom CLI arguments to `yt-dlp`, `ytarchive`, and `ffmpeg` for specialized workflows.
-- **Automated PO Tokens** — an integrated Rust-based `pot-provider` sidecar container automatically generates Proof-of-Origin tokens for every download, bypassing bot blocks with zero configuration.
-- **Forward Progress Watchdog** — the backend monitors all downloads; if a process stalls for 60 seconds (potentially due to a 403 bot block), it is automatically killed and cleaned up.
-- **Cancel Cut** — instantly stop slow re-encodes with automatic cleanup of unfinished files.
-- **Persistent UI State** — navigate between tabs without losing progress or input data thanks to Vue's `KeepAlive`.
-- **Command log** — every CLI command executed is timestamped and logged to `data/logs/commands.log`. Progress is prefixed with the job ID in `docker logs` for easy debugging.
+- **Unified Downloader:**
+  - **Multi-Download System** — download up to **5 concurrent** videos, livestreams, or audio files.
+  - **Quality Selector** — choose from Best, 1080p, 720p, etc. for videos.
+  - **Audio Mode** — download best audio stream, with optional re-encoding to MP3.
+  - **Livestream Support** — track catch-up progress and mux segments on completion.
+  - **Configurable Proxy** — built-in SOCKS4/5 and HTTP proxy support with credential redaction in logs.
+- **Robust YouTube Access:**
+  - **Automated PO Tokens & Visitor ID** — integrated with a `pot-provider` sidecar to bypass YouTube's strictest bot-detection.
+  - **Toggleable PO Token** — optionally enable PO tokens for standard downloads to balance speed and reliability.
+  - **Robust HTML Title Fetching** — a lightweight, secondary title scraper that bypasses bot detection for near-instant metadata retrieval.
+  - **JS Challenge Solving** — automatically solves YouTube JS challenges via Node.js and remote components for full-speed downloads.
+  - **Session Isolation** — uses per-job cache directories to prevent session clashing and fix HTTP 403 Forbidden errors on concurrent or long downloads.
+- **Advanced FFmpeg Cutter:**
+  - **Instant Cut** — use stream copy (`-c:v copy`) for near-instant, lossless results.
+  - **Full Re-encode** — optional transcoding for maximum device compatibility.
+  - **Smart Slider UX** — Start and End sliders automatically push each other to maintain valid selections; sliders reset perfectly on new file load.
+  - **High-Precision Mode** — an advanced setting unlocks secondary sliders for centisecond-accurate cuts.
+  - **Library & Upload Support** — cut from finished downloads or directly upload a file.
+- **Intelligent Job & System Management:**
+  - **Smooth Real-time Progress** — track all jobs via independent cards with high-frequency (10 FPS) smooth progress updates.
+  - **Dynamic Timeout Watchdog** — a smart timeout kills legitimately stalled jobs but allows long post-processing tasks to finish.
+  - **Automatic Recovery & Cleanup** — failed livestreams are automatically recovered. Stale temp files are cleaned up on startup.
+  - **Persistent State** — jobs list and UI state are preserved across browser refreshes and server restarts.
+- **Clear User Interface:**
+  - **Task-based Tabs** for Downloading, Cutting, and Settings.
+  - **Configurable Paths & Arguments** from the Settings UI.
+  - **Detailed Command Logging** to `data/logs/commands.log`.
 
 ---
 
@@ -56,8 +58,9 @@ A self-hosted web interface for downloading YouTube videos and trimming them —
 | Tool | Role |
 |------|------|
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Video and audio downloads from YouTube |
-| [ytarchive](https://github.com/Kethsar/ytarchive) | Livestream recording (downloads as the stream happens) |
+| [ytarchive](https://github.com/dreammu/ytarchive) | Livestream recording (custom fork with `--visitor-data` support) |
 | [ffmpeg](https://github.com/FFmpeg/FFmpeg) | Video/audio cutting and audio re-encoding |
+| [pot-provider](https://github.com/brainicism/bgutil-ytdlp-pot-provider) | Sidecar service for automated PO Token generation |
 
 ---
 
@@ -144,6 +147,9 @@ All settings are available in the **Settings** tab of the UI.
 | Video format | `mp4` | Default output extension for video cuts (MP4, MKV, MOV, WebM). |
 | Audio format | `mp3` | Default output extension for audio cuts (MP3, M4A, WAV, FLAC, Opus). |
 | Re-encode Audio Instant | `false` | If true, forces AAC audio re-encoding during Instant Cuts for better compatibility. |
+| High Precision Cutter | `false` | If true, enables secondary sliders in the Cutter for centisecond precision. |
+| Enable PO Token | `false` | If true, applies PO tokens to standard `yt-dlp` downloads (always used for livestreams). |
+| Proxy Support | `false` | Enable/Disable global proxy. Supports SOCKS4, SOCKS5, and HTTP with authentication. |
 
 ### Using cookies
 
@@ -173,10 +179,11 @@ Browser  →  POST /api/download  →  FastAPI spawns subprocess  →  yt-dlp or
 
 The backend tracks all jobs in a `JobManager` that persists to `data/jobs.json`. This enables:
 - **Resilient State:** If the server restarts, orphaned downloads are identified on startup and marked as "interrupted."
+- **Automatic Livestream Recovery:** If a livestream download fails or is terminated unexpectedly, the system will automatically attempt to recover it by locating the largest valid video file in the temporary directory and moving it to `outputs/`. If no single large file is found, it will attempt to mux all downloaded `.ts` segments into a complete video.
+- **7-Day Temp File Retention:** Failed livestream temporary files are preserved for 7 days to allow for manual recovery. A cleanup task runs on startup to automatically delete any stale temporary directories older than one week.
 - **Smart Cancellation:** 
   - **Livestreams:** Aborting a livestream prompts the user to either **Keep & Mux** (graceful stop with `SIGINT` + `--merge`) or **Delete All** (forced stop with cleanup of the job temp folder).
   - **Regular Downloads:** Users can choose to stop and keep partial files or perform a full cleanup.
-- **Livestream Finalization:** Interrupted livestreams can be manually muxed from remaining `.ts` segments via a dedicated recovery endpoint.
 - **History:** Completed, cancelled, and interrupted jobs remain in the list until manually cleared from the Settings tab.
 
 ### FFmpeg cut flow
@@ -195,8 +202,7 @@ ffmpeg -y -ss <start> -i <input> -t <duration> -c:v libx264 -crf 23 -preset supe
 ```
 
 Key flags:
-- `-ss` **before** `-i` — input-level seek, fast even for large files.
-- `-t` — duration of the clip (computed as `end - start` on the backend).
+- `-ss` and `-to` — The start and end timestamps. The backend passes the user's selection directly to ffmpeg, which handles a variety of formats including seconds (`65.5`) and timestamps (`01:05.50`).
 - `-c:v copy` — used by default; video stream is never re-encoded; cut is instantaneous.
 - `-progress pipe:1` — ffmpeg writes machine-readable `key=value` progress lines to stdout.
 - All edited clips are saved to the `outputs/ffmpeg/` subdirectory.
@@ -263,9 +269,8 @@ npm run dev
 ## Limitations
 
 - **No authentication** — anyone on the network can access the UI. Run behind a VPN or reverse proxy with auth (e.g. Caddy + basic auth, or Authelia) if exposed beyond localhost.
-- **Keyframe-accurate cuts only** — when using Instant Cut, the start point snaps to the nearest keyframe. Use Full Re-encode for exact frame accuracy.
+- **Keyframe-accurate Instant Cuts** — By default, the cutter uses a fast stream-copy mode. This is nearly instantaneous but means the cut starts at the nearest video keyframe, not the exact timestamp. The new high-precision mode helps specify the timestamp more accurately, but for true frame-perfect cuts, you must enable the "Full Re-encode" option.
 - **Livestream progress is approximate** — ytarchive does not report a reliable percentage for ongoing streams; the UI shows segment count during catch-up and capture.
-- **Persistent job store** — active and past jobs are saved to `data/jobs.json`. While this survives container restarts, active subprocesses are still orphaned if the container is killed.
 
 ---
 
