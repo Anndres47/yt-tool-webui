@@ -190,7 +190,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import axios from 'axios'
 
 const sourceTab = ref('library')
@@ -314,9 +314,13 @@ function onFileUpload(event) {
   endTimeCs.value = 0
 }
 
-function onMetadata() {
+async function onMetadata() {
   if (!mediaEl.value) return
   duration.value = mediaEl.value.duration || 0
+  
+  // Wait for DOM to update slider 'max' before setting value
+  await nextTick()
+  
   // Default end to end of video
   endTime.value = duration.value
   endTimeCs.value = Math.round((duration.value - Math.floor(duration.value)) * 100)
