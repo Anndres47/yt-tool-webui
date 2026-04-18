@@ -332,6 +332,8 @@ body {
 /* ── Inputs ────────────────────────────────────────── */
 input[type="text"],
 input[type="url"],
+input[type="password"],
+input[type="number"],
 select {
   font-family: var(--font-mono);
   font-size: 13px;
@@ -349,6 +351,8 @@ select {
 
 input[type="text"]:focus,
 input[type="url"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
 select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);

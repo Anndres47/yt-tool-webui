@@ -66,15 +66,16 @@
       </div>
 
       <template v-if="cfg.proxy_enabled">
-        <div class="field-group">
-          <div class="field">
-            <label class="field-label">Type</label>
-            <select v-model="cfg.proxy_type">
-              <option value="http">HTTP</option>
-              <option value="socks4">SOCKS4</option>
-              <option value="socks5">SOCKS5</option>
-            </select>
-          </div>
+        <div class="field" style="margin-top:14px">
+          <label class="field-label">Type</label>
+          <select v-model="cfg.proxy_type">
+            <option value="http">HTTP</option>
+            <option value="socks4">SOCKS4</option>
+            <option value="socks5">SOCKS5</option>
+          </select>
+        </div>
+
+        <div class="field-group" style="grid-template-columns: 1fr 100px;">
           <div class="field">
             <label class="field-label">Host</label>
             <input type="text" v-model="cfg.proxy_host" placeholder="e.g. 192.168.1.1 or proxy.example.com" />
@@ -322,4 +323,14 @@ async function clearJobs() {
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Hide number spinners */
+input[type=number]::-webkit-inner-spin-button, 
+input[type=number]::-webkit-outer-spin-button { 
+  -webkit-appearance: none; 
+  margin: 0; 
+}
+input[type=number] {
+  -moz-appearance: textfield;
+}
 </style>
