@@ -263,7 +263,14 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
         # Final Signal: Wait a moment for the watcher task to set 'done'
         await asyncio.sleep(0.5)
         if job_id in subscribers:
-            msg = f"data: {json.dumps({'done': True})}\n\n"
+            job = job_manager.get_job(job_id)
+            # Include output/title in the final signal so the UI can display it
+            final_data = {"done": True}
+            if job:
+                if job.get("output"): final_data["output"] = job.get("output")
+                if job.get("title"): final_data["title"] = job.get("title")
+
+            msg = f"data: {json.dumps(final_data)}\n\n"
             for q in subscribers[job_id]:
                 await q.put(msg)
             del subscribers[job_id]

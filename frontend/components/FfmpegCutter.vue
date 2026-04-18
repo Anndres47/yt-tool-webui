@@ -317,10 +317,18 @@ function setFromCurrent(which) {
   if (!mediaEl.value) return
   const t = mediaEl.value.currentTime
   if (which === 'start') {
-    startTime.value = Math.min(Math.floor(t), endTime.value)
+    startTime.value = Math.floor(t)
     startTimeCs.value = Math.round((t - Math.floor(t)) * 100)
+    // If start moves past end, push end forward by 10s to keep selection valid
+    if (finalStartTime.value >= finalEndTime.value) {
+      const newEnd = Math.min(finalStartTime.value + 10, duration.value)
+      endTime.value = Math.floor(newEnd)
+      endTimeCs.value = Math.round((newEnd - Math.floor(newEnd)) * 100)
+    }
   } else {
-    endTime.value = Math.max(Math.floor(t), startTime.value)
+    // Allow setting End (B) freely anywhere. 
+    // Validation in cut() will handle A > B cases.
+    endTime.value = Math.floor(t)
     endTimeCs.value = Math.round((t - Math.floor(t)) * 100)
   }
 }
