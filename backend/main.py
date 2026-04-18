@@ -123,7 +123,7 @@ async def get_video_title(url: str, potoken: str, visitor_id: str, proxy_url: st
         # if visitor_id:
         #     cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
 
-        cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node"]
+        cmd = ["yt-dlp", url, "--get-title", "--js-runtimes", "node", "--remote-components", "ejs:github"]
         if potoken:
             cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
         if visitor_id:
@@ -159,12 +159,15 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
     buffer = ""
     stalled_seconds = 0
     has_progressed = False
+    last_broadcast = 0
     
     try:
+        # Smaller chunks for standard downloads for faster feedback
+        chunk_size = 1024 if mode == "livestream" else 128
+
         while process.returncode is None:
             try:
-                # Read larger chunks (1024) to reduce loop cycles
-                chunk_bytes = await asyncio.wait_for(process.stdout.read(1024), timeout=15.0)
+                chunk_bytes = await asyncio.wait_for(process.stdout.read(chunk_size), timeout=15.0)
                 if not chunk_bytes:
                     break
                 
@@ -173,14 +176,13 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                 lines = re.split(r"[\r\n]+", buffer)
                 buffer = lines.pop() if lines else ""
                 
-                latest_event_data = None
-                
                 for line in lines:
                     line = line.strip()
                     if not line: continue
                     
                     print(f"[job:{job_id[:8]}] {line}", flush=True)
                     
+                    latest_event_data = None
                     if mode == "livestream":
                         seg_match = re.search(r"(?:Video|Audio) (?:Segments|Fragments):\s*(\d+)", line, re.IGNORECASE)
                         if seg_match:
@@ -198,11 +200,14 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                             job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
                             latest_event_data = {"percent": percent, "speed": dl_match.group(2).replace("~", ""), "eta": dl_match.group(3).replace("~", "")}
 
-                if latest_event_data and job_id in subscribers:
-                    msg = f"data: {json.dumps(latest_event_data)}\n\n"
-                    for q in subscribers[job_id]:
-                        await q.put(msg)
-                    await asyncio.sleep(0.1)
+                    # Throttle broadcasts to ~10 FPS for UI smoothness
+                    if latest_event_data and job_id in subscribers:
+                        now = time.time()
+                        if now - last_broadcast > 0.1 or mode == "livestream":
+                            msg = f"data: {json.dumps(latest_event_data)}\n\n"
+                            for q in subscribers[job_id]:
+                                await q.put(msg)
+                            last_broadcast = now
 
             except asyncio.TimeoutError:
                 if has_progressed:
@@ -259,6 +264,8 @@ async def watch_job(job_id: str, process: asyncio.subprocess.Process):
     if not is_success and final_status != "cancelled":
         final_status = "error"
         print(f"\033[91m[job:{job_id[:8]}] Process failed with code {rc}\033[0m", flush=True)
+    elif is_success and final_status == "done":
+        print(f"\033[92m[job:{job_id[:8]}] Job completed successfully.\033[0m", flush=True)
 
     # Cleanup logic
     if temp_dir and os.path.exists(temp_dir):
@@ -553,7 +560,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
         cmd += [url, quality]
     else:
-        cmd = ["yt-dlp", "--newline", "--js-runtimes", "node", "-f", QUALITY_MAP.get(quality, QUALITY_MAP["best"]), "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
+        cmd = ["yt-dlp", "--newline", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", QUALITY_MAP.get(quality, QUALITY_MAP["best"]), "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
         if reencode_audio == "true": cmd += ["-x", "--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         
