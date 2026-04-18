@@ -635,39 +635,55 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
         cmd += [url, quality]
     else:
-        # Standard download logic (Video/Audio)
-        fmt = "bestaudio/best" if mode == "audio" else QUALITY_MAP.get(quality, QUALITY_MAP["best"])
-        # Use a per-job cache directory to allow session persistence (fixing 403s) without clashing
-        cmd = ["yt-dlp", "--newline", "--no-playlist", "--cache-dir", f"{job_temp_dir}/cache", "--ignore-config", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", fmt, "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
-        
-        if mode == "audio":
-            cmd += ["-x"]
-            if reencode_audio == "true": 
-                cmd += ["--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
-        
-        if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
-        
-        # SAFE MODE: complex arguments to bypass bot detection on bad IPs
-        # cmd += ["--extractor-args", "youtubetab:skip=webpage"]
-        # y_args = ["player_client=default,-web,-web_safari", "player_skip=webpage,configs"]
-        # if potoken:
-        #     y_args.append(f"po_token=web+{potoken}")
-        # if visitor_id:
-        #     y_args.append(f"visitor_data={visitor_id}")
-        # cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
-        # if visitor_id:
-        #     cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
+        # Logic: Livestream MUST have a token. Video/Audio can skip if configured.
+        should_fetch_token = mode == "livestream" or cfg.get("enable_ytdlp_potoken")
 
-        if potoken:
-            cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
-        if visitor_id:
-            cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
-        if proxy_url:
-            cmd += ["--proxy", proxy_url]
-            
-        if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
-        cmd.append(url)
+        if should_fetch_token:
+            if len(cfg.get("potoken", "").strip()) < 20:
+                potoken, visitor_id = await get_auto_potoken()
+            else:
+                potoken = cfg["potoken"].strip()
 
+        # Get title AFTER fetching token so we can use it
+        title = await get_video_title(url, potoken, visitor_id, proxy_url)
+
+        if len([j for j in job_manager.get_all_jobs().values() if j.get("type") == "download" and j.get("status") == "running"]) >= 5:
+            raise HTTPException(status_code=429, detail="Limit reached")
+
+        job_temp_dir = Path(cfg["download_path"]) / f"job_{job_id[:8]}"
+        job_temp_dir.mkdir(parents=True, exist_ok=True)
+
+        if mode == "livestream":
+            safe_title = re.sub(r'[^\w\-\. ]', '_', title).strip() if title and title != "Unknown Title" else job_id[:8]
+            cmd = ["ytarchive", "--newline", "--merge", "-td", str(job_temp_dir), "-o", f"{cfg['output_path']}/{safe_title}"]
+            if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
+            if potoken: cmd += ["--potoken", potoken]
+            if visitor_id: cmd += ["--visitor-data", visitor_id]
+            if proxy_url: cmd += ["--proxy", proxy_url]
+            if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
+            cmd += [url, quality]
+        else:
+            # Standard download logic (Video/Audio)
+            fmt = "bestaudio/best" if mode == "audio" else QUALITY_MAP.get(quality, QUALITY_MAP["best"])
+            # Use a per-job cache directory to allow session persistence (fixing 403s) without clashing
+            cmd = ["yt-dlp", "--newline", "--cache-dir", f"{job_temp_dir}/cache", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", fmt, "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
+
+            if mode == "audio":
+                cmd += ["-x"]
+                if reencode_audio == "true": 
+                    cmd += ["--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
+
+            if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
+
+            if potoken:
+                cmd += ["--extractor-args", f"youtube:po_token=web+{potoken}"]
+            if visitor_id:
+                cmd += ["--add-header", f"X-Goog-Visitor-Id:{visitor_id}"]
+            if proxy_url:
+                cmd += ["--proxy", proxy_url]
+
+            if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
+            cmd.append(url)
     print(f"[job:{job_id[:8]}] EXECUTING: {redact_cmd(cmd)}", flush=True)
     log_command(job_id, cmd)
     process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
