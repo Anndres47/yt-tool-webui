@@ -698,7 +698,8 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         if potoken: cmd += ["--potoken", potoken]
         if visitor_id: cmd += ["--visitor-data", visitor_id]
-        if working_proxy: cmd += ["--proxy", working_proxy]
+        # Proxy is disabled for livestreams as ytarchive is currently more trusted by YouTube
+        # if working_proxy: cmd += ["--proxy", working_proxy]
         if live_from: cmd += ["--live-from", live_from]
         if capture_duration: cmd += ["--capture-duration", capture_duration]
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
