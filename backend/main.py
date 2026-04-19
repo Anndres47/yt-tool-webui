@@ -741,7 +741,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
 
     asyncio.create_task(watch_job(job_id, process))
     asyncio.create_task(broadcast_output(job_id, process, mode))
-    return {"job_id": job_id}
+    return {"job_id": job_id, "title": title}
 
 
 @app.get("/api/download/progress/{job_id}")
