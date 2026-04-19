@@ -53,6 +53,23 @@
 
       <div class="field" style="margin-top:14px">
         <label
+          :class="['toggle-row', { checked: cfg.auto_proxy_enabled }]"
+          @click="cfg.auto_proxy_enabled = !cfg.auto_proxy_enabled"
+        >
+          <div class="toggle-box">
+            <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+              <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          Enable Auto Proxy Pool (Background managed)
+        </label>
+        <div style="font-size:10px; color:var(--muted); margin-top:4px; padding-left:24px;">
+          Automatically find and rotate healthy proxies when the system is idle.
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:14px" v-if="!cfg.auto_proxy_enabled">
+        <label
           :class="['toggle-row', { checked: cfg.proxy_enabled }]"
           @click="cfg.proxy_enabled = !cfg.proxy_enabled"
         >
@@ -61,11 +78,11 @@
               <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
-          Enable Proxy
+          Enable Manual Proxy
         </label>
       </div>
 
-      <template v-if="cfg.proxy_enabled">
+      <template v-if="cfg.proxy_enabled && !cfg.auto_proxy_enabled">
         <div class="field" style="margin-top:14px">
           <label class="field-label">Type</label>
           <select v-model="cfg.proxy_type">
@@ -187,6 +204,39 @@
 
         <div class="field" style="margin-top:14px">
           <label
+            :class="['toggle-row', { checked: cfg.show_advanced_livestream }]"
+            @click="cfg.show_advanced_livestream = !cfg.show_advanced_livestream"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Show Advanced Livestream Options
+          </label>
+        </div>
+
+        <div class="field" style="margin-top:14px">
+          <label
+            :class="['toggle-row', { checked: showPoolSizeSlider }]"
+            @click="showPoolSizeSlider = !showPoolSizeSlider"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Customize Auto Proxy Pool Size
+          </label>
+        </div>
+
+        <div class="field" v-if="showPoolSizeSlider" style="margin-top:14px">
+          <label class="field-label">Auto Proxy Pool Size ({{ cfg.proxy_pool_size }}) <span style="color:var(--muted);font-weight:400">(Healthy proxies to maintain)</span></label>
+          <input type="range" v-model.number="cfg.proxy_pool_size" min="5" max="50" step="1" />
+        </div>
+
+        <div class="field" style="margin-top:14px">
+          <label
             :class="['toggle-row', { checked: cfg.high_precision_cutter }]"
             @click="cfg.high_precision_cutter = !cfg.high_precision_cutter"
           >
@@ -251,6 +301,9 @@ const cfg = ref({
   audio_format: 'mp3',
   reencode_audio_instant: false,
   enable_ytdlp_potoken: false,
+  show_advanced_livestream: false,
+  auto_proxy_enabled: false,
+  proxy_pool_size: 15,
   high_precision_cutter: false,
   proxy_enabled: false,
   proxy_type: 'socks5',
@@ -261,9 +314,15 @@ const cfg = ref({
   proxy_password: ''
 })
 const showAdvanced = ref(false)
+const showPoolSizeSlider = ref(false)
 const saving = ref(false)
 const clearing = ref(false)
 const msg = ref(null)
+
+import { watch } from 'vue'
+watch(showPoolSizeSlider, (val) => {
+  if (!val) cfg.value.proxy_pool_size = 15
+})
 
 onMounted(async () => {
   try {

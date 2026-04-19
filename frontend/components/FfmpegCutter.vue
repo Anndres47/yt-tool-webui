@@ -190,7 +190,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, onActivated } from 'vue'
 import axios from 'axios'
 
 const sourceTab = ref('library')
@@ -231,14 +231,18 @@ const clipDuration = computed(() => {
   return d > 0 ? d : 0
 })
 
+async function refreshSettings() {
+  try {
+    const res = await axios.get('/api/settings')
+    settings.value = res.data
+  } catch (_) {}
+}
+
 onMounted(async () => {
   loadLibrary()
+  await refreshSettings()
   try {
-    const [jobsRes, settingsRes] = await Promise.all([
-      axios.get('/api/jobs'),
-      axios.get('/api/settings')
-    ])
-    settings.value = settingsRes.data
+    const jobsRes = await axios.get('/api/jobs')
     const jobs = jobsRes.data
     for (const [id, job] of Object.entries(jobs)) {
       if (job.type === 'ffmpeg' && job.status === 'running') {
@@ -251,6 +255,11 @@ onMounted(async () => {
       }
     }
   } catch (_) {}
+})
+
+onActivated(async () => {
+  await refreshSettings()
+  loadLibrary()
 })
 
 async function loadLibrary() {
@@ -436,6 +445,14 @@ function listenToCut(jobId) {
   eventSource = new EventSource(`/api/ffmpeg/progress/${jobId}`)
   eventSource.onmessage = (e) => {
     const data = JSON.parse(e.data)
+
+    // Clear any temporary connection warnings
+    if (cutMsg.value?.text === 'Connection lost. Reconnecting...') {
+      cutMsg.value = null
+    }
+
+    if (data.ping) return
+
     if (data.error) {
       cutMsg.value = { type: 'error', text: data.error }
       cutting.value = false
@@ -456,10 +473,8 @@ function listenToCut(jobId) {
   }
   eventSource.onerror = () => {
     if (cutting.value) {
-      cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
-      cutting.value = false
-      eventSource?.close()
-      eventSource = null
+      // Don't close the connection, allow native EventSource auto-reconnect
+      cutMsg.value = { type: 'error', text: 'Connection lost. Reconnecting...' }
     }
   }
 }

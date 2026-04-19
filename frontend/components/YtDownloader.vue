@@ -59,6 +59,69 @@
           @keyup.enter="startDownload"
         />
       </div>
+
+      <!-- Advanced Livestream Options -->
+      <div v-if="mode === 'livestream' && settings.show_advanced_livestream" style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px;">
+        <div style="font-size:12px; font-weight:600; margin-bottom: 8px;">Advanced Options</div>
+        
+        <div class="field">
+          <label
+            :class="['toggle-row', { checked: enableLiveFrom }]"
+            @click="!(submitting || activeTasks.length >= 5) && (enableLiveFrom = !enableLiveFrom)"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Live From (Start from a time in the past)
+          </label>
+          <div v-if="enableLiveFrom" style="margin-top: 8px; padding-left: 24px;">
+            <div style="display: flex; gap: 16px;">
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Hours Back ({{ liveFromHours }})</label>
+                <input type="range" v-model.number="liveFromHours" min="0" max="48" step="1" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Minutes Back ({{ liveFromMins }})</label>
+                <input type="range" v-model.number="liveFromMins" min="0" max="55" step="5" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+            </div>
+            <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+              {{ liveFromHours === 0 && liveFromMins === 0 ? 'Starts from NOW' : `Starts ${liveFromHours}h ${liveFromMins}m before NOW` }}
+            </div>
+          </div>
+        </div>
+
+        <div class="field" style="margin-top: 14px;">
+          <label
+            :class="['toggle-row', { checked: enableCaptureDuration }]"
+            @click="!(submitting || activeTasks.length >= 5) && (enableCaptureDuration = !enableCaptureDuration)"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Capture Duration (Stop recording after X time)
+          </label>
+          <div v-if="enableCaptureDuration" style="margin-top: 8px; padding-left: 24px;">
+            <div style="display: flex; gap: 16px;">
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Hours ({{ captureDurationHours }})</label>
+                <input type="range" v-model.number="captureDurationHours" min="0" max="48" step="1" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Minutes ({{ captureDurationMins }})</label>
+                <input type="range" v-model.number="captureDurationMins" min="0" max="55" step="5" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+            </div>
+            <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+              Records for {{ captureDurationHours }}h {{ captureDurationMins }}m
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Actions & Limit Disclaimer -->
@@ -133,11 +196,22 @@
         <div class="task-progress-area">
           <div class="progress-header">
             <div>
-              <div v-if="task.mode === 'livestream' || task.isLive" class="live-badge">
-                <div class="live-dot"></div>
-                <span v-if="task.isLive">Live — {{ task.segments }} segments</span>
-                <span v-else>Catching up — {{ task.segments }} segments</span>
-              </div>
+              <!-- Livestream Status Badges -->
+              <template v-if="task.mode === 'livestream' || task.isLive">
+                <div v-if="task.liveStatus === 'muxing' || task.status === 'finishing'" class="live-badge live-muxing">
+                  <div class="live-dot"></div>
+                  <span>Muxing fragments...</span>
+                </div>
+                <div v-else-if="task.vFrags < task.aFrags && task.aFrags > 0" class="live-badge live-catching">
+                  <div class="live-dot"></div>
+                  <span>Catching up — V: {{ task.vFrags }} / A: {{ task.aFrags }}</span>
+                </div>
+                <div v-else class="live-badge live-recording">
+                  <div class="live-dot"></div>
+                  <span>Live recording — {{ task.vFrags }} segments</span>
+                </div>
+              </template>
+              
               <div v-else class="progress-pct">{{ task.percent.toFixed(1) }}<span style="font-size:11px;opacity:0.6">%</span></div>
             </div>
             <div class="progress-meta">
@@ -148,8 +222,8 @@
           <div class="progress-track">
             <div
               class="progress-fill"
-              :class="{ indeterminate: task.mode === 'livestream' && !task.done }"
-              :style="{ width: (task.mode === 'livestream' && !task.done) ? '' : task.percent + '%' }"
+              :class="{ indeterminate: (task.mode === 'livestream' || task.isLive) && !task.done }"
+              :style="((task.mode === 'livestream' || task.isLive) && !task.done) ? {} : { width: task.percent + '%' }"
             ></div>
           </div>
         </div>
@@ -164,7 +238,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onActivated, watch } from 'vue'
 import axios from 'axios'
 
 const modes = [
@@ -189,9 +263,43 @@ const reencodeAudio = ref(false)
 const submitting = ref(false)
 const activeTasks = ref([])
 
-onMounted(async () => {
+const settings = ref({ show_advanced_livestream: false })
+
+const enableLiveFrom = ref(false)
+const liveFromHours = ref(0)
+const liveFromMins = ref(0)
+
+const enableCaptureDuration = ref(false)
+const captureDurationHours = ref(0)
+const captureDurationMins = ref(30)
+
+// Constraints: Live From (Max 48h 0m)
+watch([liveFromHours, liveFromMins], ([h, m]) => {
+  if (h >= 48 && m > 0) {
+    liveFromMins.value = 0
+  }
+})
+
+// Constraints: Capture Duration (Min 0h 30m, Max 48h 0m)
+watch([captureDurationHours, captureDurationMins], ([h, m]) => {
+  if (h === 0 && m < 30) {
+    captureDurationMins.value = 30
+  }
+  if (h >= 48 && m > 0) {
+    captureDurationMins.value = 0
+  }
+})
+
+async function refreshSettings() {
   try {
-    // Load existing running jobs
+    const res = await axios.get('/api/settings')
+    settings.value = res.data
+  } catch (_) {}
+}
+
+onMounted(async () => {
+  await refreshSettings()
+  try {
     const jobsRes = await axios.get('/api/jobs')
     const jobs = jobsRes.data
     for (const [id, job] of Object.entries(jobs)) {
@@ -202,13 +310,21 @@ onMounted(async () => {
   } catch (_) {}
 })
 
+onActivated(async () => {
+  await refreshSettings()
+})
+
 function addTaskFromJob(id, job) {
   const task = {
     id,
     url: job.url || 'Unknown source',
     title: job.title || '',
     mode: job.mode || 'video',
+    status: job.status || 'running',
     percent: job.percent || 0,
+    vFrags: job.v_frags || 0,
+    aFrags: job.a_frags || 0,
+    liveStatus: job.type === 'finalize' ? 'muxing' : '',
     speed: '',
     eta: '',
     isLive: !!job.is_live,
@@ -257,15 +373,37 @@ const startDownload = async () => {
     form.append('quality', quality.value)
     form.append('reencode_audio', reencodeAudio.value ? 'true' : 'false')
 
+    if (taskMode === 'livestream') {
+      if (enableLiveFrom.value) {
+        if (liveFromHours.value === 0 && liveFromMins.value === 0) {
+          form.append('live_from', 'now')
+        } else {
+          const h = liveFromHours.value.toString().padStart(2, '0')
+          const m = liveFromMins.value.toString().padStart(2, '0')
+          form.append('live_from', `-${h}:${m}:00`)
+        }
+      }
+      if (enableCaptureDuration.value) {
+        const h = captureDurationHours.value.toString().padStart(2, '0')
+        const m = captureDurationMins.value.toString().padStart(2, '0')
+        form.append('capture_duration', `${h}:${m}:00`)
+      }
+    }
+
     const res = await axios.post('/api/download', form)
     const jobId = res.data.job_id
+    const jobTitle = res.data.title || ''
     
     const task = {
       id: jobId,
       url: taskUrl,
-      title: '', // Will be updated via the jobs API on next refresh
+      title: jobTitle,
       mode: taskMode,
+      status: 'running',
       percent: 0,
+      vFrags: 0,
+      aFrags: 0,
+      liveStatus: '',
       speed: '',
       eta: '',
       isLive: false,
@@ -279,6 +417,14 @@ const startDownload = async () => {
     
     activeTasks.value.push(task)
     url.value = '' // Clear for next download
+    // Reset advanced options
+    enableLiveFrom.value = false
+    liveFromHours.value = 0
+    liveFromMins.value = 0
+    enableCaptureDuration.value = false
+    captureDurationHours.value = 0
+    captureDurationMins.value = 30
+    
     listenToJob(task)
   } catch (err) {
     // Show error in a temporary msg if submission fails
@@ -296,6 +442,13 @@ function listenToJob(task) {
 
   es.onmessage = (e) => {
     const data = JSON.parse(e.data)
+    
+    // Clear any temporary connection warnings
+    if (task.msg?.text === 'Connection lost. Reconnecting...') {
+      task.msg = null
+    }
+
+    if (data.ping) return
 
     if (data.error) {
       task.msg = { type: 'error', text: data.error }
@@ -321,7 +474,9 @@ function listenToJob(task) {
     }
     if (data.mode === 'livestream') {
       task.isLive = !!data.live
-      task.segments = data.segments || 0
+      if (data.v_frags !== undefined) task.vFrags = data.v_frags
+      if (data.a_frags !== undefined) task.aFrags = data.a_frags
+      if (data.status) task.liveStatus = data.status
       return
     }
     if (data.percent !== undefined) {
@@ -333,10 +488,8 @@ function listenToJob(task) {
 
   es.onerror = () => {
     if (!task.done && !task.msg) {
-      task.msg = { type: 'error', text: 'Connection lost. Refresh to reconnect.' }
-      cleanupTask(task)
-      // WE NO LONGER removeTask here. This prevents the card from disappearing
-      // while the background process is actually still running.
+      // Don't close the connection, allow native EventSource auto-reconnect
+      task.msg = { type: 'error', text: 'Connection lost. Reconnecting...' }
     }
   }
 }
@@ -366,6 +519,7 @@ function removeTask(id) {
     activeTasks.value.splice(idx, 1)
   }
 }
+
 </script>
 
 <style scoped>
@@ -425,6 +579,34 @@ function removeTask(id) {
   font-size: 10px;
   color: var(--muted);
 }
+
+/* Livestream Status Colors */
+.live-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.live-badge.live-catching { color: var(--red); }
+.live-badge.live-recording { color: var(--green); }
+.live-badge.live-muxing { color: var(--accent); }
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+}
+.live-recording .live-dot {
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
 .task-cancel-dialog {
   margin: 10px 0;
   padding: 6px 12px;

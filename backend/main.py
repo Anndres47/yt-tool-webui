@@ -7,11 +7,12 @@ import shutil
 import signal
 import urllib.request
 import time
+import uuid
 from contextlib import asynccontextmanager
 from urllib.parse import unquote
-import uuid
 from pathlib import Path
 from typing import Optional
+from html import unescape
 
 import aiofiles
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
@@ -22,6 +23,47 @@ from fastapi.staticfiles import StaticFiles
 from config import get_config, save_config
 from logger import log_command, redact_cmd
 from jobs import JobManager
+from proxies import ProxyManager
+
+# Initialize managers once
+job_manager = JobManager(get_config()["data_path"])
+proxy_manager = ProxyManager(get_config()["data_path"])
+proxy_stop_event = asyncio.Event()
+
+# Global Constants
+ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+QUALITY_MAP = {
+    "best": "bestvideo+bestaudio/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
+    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
+    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
+}
+
+# Global state for broadcasting progress
+# job_id -> list of asyncio.Queue
+subscribers: dict[str, list[asyncio.Queue]] = {}
+
+
+async def proxy_worker():
+    """Background task that scavenges for healthy proxies every hour if idle."""
+    while True:
+        # Check every 10 mins if we need to start a scavenge
+        await asyncio.sleep(600) 
+        
+        cfg = get_config()
+        if not cfg.get("auto_proxy_enabled"):
+            continue
+
+        # Check for 1h cycle since last success
+        if time.time() - proxy_manager.last_full_refresh < 3600:
+            continue
+
+        # Strictly only if idle
+        running_jobs = [j for j in job_manager.get_all_jobs().values() if j.get("status") == "running"]
+        if len(running_jobs) == 0:
+            proxy_stop_event.clear()
+            await proxy_manager.scavenge(proxy_stop_event)
 
 
 def build_proxy_url(cfg: dict) -> Optional[str]:
@@ -221,42 +263,44 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                     print(f"[job:{job_id[:8]}] {clean_line}", flush=True)
                     
                     if mode == "livestream":
-                        # Improved regex: specifically look for Video Fragments as the primary progress indicator
-                        # Also handles the generic "Segments: X" format
-                        if "Video Fragments" in clean_line or "Segments" in clean_line:
+                        v_match = re.search(r"Video Fragments:\s*(\d+)", clean_line, re.IGNORECASE)
+                        a_match = re.search(r"Audio Fragments:\s*(\d+)", clean_line, re.IGNORECASE)
+                        
+                        if v_match or a_match:
                             has_progressed = True
-                            # Find all fragment/segment numbers in the line
-                            all_nums = re.findall(r"(?:Fragments|Segments|frags):\s*(\d+)", clean_line, re.IGNORECASE)
-                            if all_nums:
-                                # If both V and A are present, sum them for "Total chunks"
-                                # but if just one is present, use that.
-                                segments = sum(int(n) for n in all_nums)
-                                is_live = any(word in clean_line.lower() for word in ["live", "up to date", "current"])
-                                job_manager.update_job(job_id, {"segments": segments, "is_live": is_live}, save_to_disk=False)
-                                latest_event_data = {"live": is_live, "segments": segments, "mode": "livestream"}
-                                
-                                # Always broadcast livestream updates immediately to keep UI active
-                                if job_id in subscribers:
-                                    msg = f"data: {json.dumps(latest_event_data)}\n\n"
-                                    for q in subscribers[job_id]:
-                                        await q.put(msg)
-                                    last_broadcast = time.time()
-                                    latest_event_data = None # Prevent double-broadcast below
+                            v_frags = int(v_match.group(1)) if v_match else 0
+                            a_frags = int(a_match.group(1)) if a_match else 0
+                            is_live = any(word in clean_line.lower() for word in ["live", "up to date", "current"])
+                            
+                            job_manager.update_job(job_id, {"v_frags": v_frags, "a_frags": a_frags, "is_live": is_live}, save_to_disk=False)
+                            latest_event_data = {"mode": "livestream", "v_frags": v_frags, "a_frags": a_frags, "live": is_live}
+                        
+                        elif any(word in clean_line.lower() for word in ["download complete", "muxing", "merging"]):
+                            latest_event_data = {"mode": "livestream", "status": "muxing"}
+                        
+                        if latest_event_data and job_id in subscribers:
+                            msg = f"data: {json.dumps(latest_event_data)}\n\n"
+                            for q in subscribers[job_id]: await q.put(msg)
+                            last_broadcast = time.time()
+                            latest_event_data = None
+
                     elif mode == "ffmpeg":
-                        # FFmpeg progress: frame= 123 ... time=00:00:05.12 ...
+                        # If this is a livestream recovery job, tell the UI we are muxing
+                        job = job_manager.get_job(job_id)
+                        is_recovery = job and job.get("type") == "finalize"
+                        
                         time_match = re.search(r"time=(\d+:\d+:\d+\.\d+)", clean_line)
                         if time_match:
                             has_progressed = True
                             cur_time_str = time_match.group(1)
-                            # Convert HH:MM:SS.ms to seconds
                             h, m, s = cur_time_str.split(':')
                             cur_sec = int(h)*3600 + int(m)*60 + float(s)
                             
-                            duration = job_manager.get_job(job_id).get("duration_s", 0)
-                            if duration > 0:
-                                percent = min(100.0, round((cur_sec / duration) * 100, 1))
-                                job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
-                                latest_event_data = {"percent": percent}
+                            duration = job.get("duration_s", 0)
+                            percent = min(100.0, round((cur_sec / duration) * 100, 1)) if duration > 0 else 0
+                            job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
+                            latest_event_data = {"percent": percent}
+                            if is_recovery: latest_event_data["status"] = "muxing"
                     else:
                         # Robust regex: handles varying spaces, tildes, and missing ETA/Speed
                         dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+([~\d.]+\S+)(?:\s+at\s+([~\d.]+\S+))?(?:\s+ETA\s+([~\d:]+))?", clean_line)
@@ -271,19 +315,25 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                             }
 
                 # Send the most recent progress update from this chunk
+                now = time.time()
                 if latest_event_data and job_id in subscribers:
-                    now = time.time()
                     if now - last_broadcast > 0.1 or mode == "livestream":
                         msg = f"data: {json.dumps(latest_event_data)}\n\n"
                         for q in subscribers[job_id]:
                             await q.put(msg)
+                        last_broadcast = now
+                elif job_id in subscribers:
+                    if now - last_broadcast > 10:
+                        for q in subscribers[job_id]:
+                            await q.put('data: {"ping": true}\n\n')
                         last_broadcast = now
 
             except asyncio.TimeoutError:
                 # 1. Heartbeat: Keep UI connection alive regardless of progress
                 if job_id in subscribers:
                     for q in subscribers[job_id]:
-                        await q.put(": ping\n\n")
+                        await q.put('data: {"ping": true}\n\n')
+                last_broadcast = time.time()
 
                 # 2. Safety Shield: If we've seen progress, don't time out (livestreams/merges)
                 if has_progressed:
@@ -424,6 +474,7 @@ async def auto_recover_livestreams(job_ids: list[str]):
             job_manager.update_job(jid, {"status": "running", "type": "finalize", "pid": process.pid}, save_to_disk=True)
             job_manager.processes[jid] = process
             asyncio.create_task(watch_job(jid, process))
+            asyncio.create_task(broadcast_output(jid, process, "ffmpeg"))
 
         except Exception as e:
             print(f"\033[91m[System] Recovery failed for {jid[:8]}: {e}\033[0m", flush=True)
@@ -459,6 +510,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(check_pot_connectivity())
     asyncio.create_task(checkpoint_saver())
     asyncio.create_task(cleanup_stale_temp_dirs())
+    asyncio.create_task(proxy_worker())
     to_recover = job_manager.cleanup_on_startup()
     if to_recover:
         asyncio.create_task(auto_recover_livestreams(to_recover))
@@ -474,21 +526,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize job manager
-job_manager = JobManager(get_config()["data_path"])
-job_manager.cleanup_on_startup()
-
-
-QUALITY_MAP = {
-    "best": "bestvideo+bestaudio/best",
-    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-}
-
-ONE_GB = 1 * 1024 * 1024 * 1024
 
 
 @app.get("/api/settings")
@@ -601,23 +638,57 @@ async def api_library_stream(folder: str, filename: str, request: Request):
 
 
 @app.post("/api/download")
-async def api_download(url: str = Form(...), mode: str = Form(...), quality: str = Form("best"), reencode_audio: str = Form("false")):
+async def api_download(url: str = Form(...), mode: str = Form(...), quality: str = Form("best"), reencode_audio: str = Form("false"), live_from: Optional[str] = Form(None), capture_duration: Optional[str] = Form(None)):
     cfg = get_config()
     job_id = str(uuid.uuid4())
-    potoken, visitor_id = "", ""
-    proxy_url = build_proxy_url(cfg)
-    
-    # Logic: Livestream MUST have a token. Video/Audio can skip if configured.
-    should_fetch_token = mode == "livestream" or cfg.get("enable_ytdlp_potoken")
-    
-    if should_fetch_token:
-        if len(cfg.get("potoken", "").strip()) < 20:
-            potoken, visitor_id = await get_auto_potoken()
-        else:
-            potoken = cfg["potoken"].strip()
 
-    # Get title AFTER fetching token so we can use it
-    title = await get_video_title(url, potoken, visitor_id, proxy_url)
+    # 1. Stop background scavenger
+    proxy_stop_event.set()
+
+    # 2. Resolve potential proxies (Skip entirely for livestreams)
+    if mode == "livestream":
+        potential_proxies = [None]
+    else:
+        manual_proxy = build_proxy_url(cfg)
+        potential_proxies = [manual_proxy] if manual_proxy else []
+        if cfg.get("auto_proxy_enabled"):
+            potential_proxies.extend(proxy_manager.get_valid_proxies())
+
+    # Fallback to direct if no proxies selected/available
+    if not potential_proxies:
+        potential_proxies = [None]
+    # 3. Rotate through proxies (up to 5) to find one that works
+    working_proxy = None
+    title = "Unknown Title"
+    potoken, visitor_id = "", ""
+
+    for attempt, current_proxy in enumerate(potential_proxies[:5]):
+        try:
+            print(f"[job:{job_id[:8]}] Attempt {attempt+1}: Testing proxy {redact_cmd([current_proxy]) if current_proxy else 'DIRECT'}", flush=True)
+
+            # Reset tokens for each new proxy attempt
+            potoken, visitor_id = "", ""
+            should_fetch_token = mode == "livestream" or cfg.get("enable_ytdlp_potoken")
+            if should_fetch_token:
+                if len(cfg.get("potoken", "").strip()) < 20:
+                    potoken, visitor_id = await get_auto_potoken()
+                else:
+                    potoken = cfg["potoken"].strip()
+
+            title = await get_video_title(url, potoken, visitor_id, current_proxy)
+
+            if title and title != "Unknown Title":
+                working_proxy = current_proxy
+                print(f"[job:{job_id[:8]}] Found working connection with proxy: {working_proxy or 'DIRECT'}", flush=True)
+                break
+            else:
+                # If title fetch failed, flag the proxy and try next
+                if current_proxy and cfg.get("auto_proxy_enabled"):
+                    proxy_manager.flag_proxy(current_proxy)
+                print(f"[job:{job_id[:8]}] Proxy failed or flagged. Retrying...", flush=True)
+
+        except Exception as e:
+            print(f"[job:{job_id[:8]}] Proxy attempt error: {e}", flush=True)
 
     if len([j for j in job_manager.get_all_jobs().values() if j.get("type") == "download" and j.get("status") == "running"]) >= 5:
         raise HTTPException(status_code=429, detail="Limit reached")
@@ -631,7 +702,10 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         if potoken: cmd += ["--potoken", potoken]
         if visitor_id: cmd += ["--visitor-data", visitor_id]
-        if proxy_url: cmd += ["--proxy", proxy_url]
+        # Proxy is disabled for livestreams as ytarchive is currently more trusted by YouTube
+        # if working_proxy: cmd += ["--proxy", working_proxy]
+        if live_from: cmd += ["--live-from", live_from]
+        if capture_duration: cmd += ["--capture-duration", capture_duration]
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
         cmd += [url, quality]
     else:
@@ -639,24 +713,26 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         fmt = "bestaudio/best" if mode == "audio" else QUALITY_MAP.get(quality, QUALITY_MAP["best"])
         # Use a per-job cache directory to allow session persistence (fixing 403s) without clashing
         cmd = ["yt-dlp", "--newline", "--cache-dir", f"{job_temp_dir}/cache", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", fmt, "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
-        
+
         if mode == "audio":
             cmd += ["-x"]
             if reencode_audio == "true": 
                 cmd += ["--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
-        
+
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
-        
+
+        # Inject tokens if available (governed by settings toggle)
         if potoken:
             y_args = [f"po_token=web+{potoken}"]
             if visitor_id: y_args.append(f"visitor_data={visitor_id}")
             cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
-        
-        if proxy_url:
-            cmd += ["--proxy", proxy_url]
-            
+
+        if working_proxy:
+            cmd += ["--proxy", working_proxy]
+
         if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
         cmd.append(url)
+
     print(f"[job:{job_id[:8]}] EXECUTING: {redact_cmd(cmd)}", flush=True)
     log_command(job_id, cmd)
     process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
@@ -671,7 +747,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
 
     asyncio.create_task(watch_job(job_id, process))
     asyncio.create_task(broadcast_output(job_id, process, mode))
-    return {"job_id": job_id}
+    return {"job_id": job_id, "title": title}
 
 
 @app.get("/api/download/progress/{job_id}")
@@ -687,6 +763,12 @@ async def api_download_progress(job_id: str):
         q = asyncio.Queue()
         if job_id not in subscribers: subscribers[job_id] = []
         subscribers[job_id].append(q)
+        
+        # Yield current progress immediately to prevent UI from waiting for next update
+        initial_data = {"percent": job.get("percent", 0), "title": job.get("title")}
+        if job.get("mode") == "livestream":
+            initial_data.update({"segments": job.get("segments", 0), "live": job.get("is_live", False), "mode": "livestream"})
+        yield f"data: {json.dumps(initial_data)}\n\n"
         
         try:
             while True:
@@ -772,6 +854,10 @@ async def api_ffmpeg_progress(job_id: str):
         q = asyncio.Queue()
         if job_id not in subscribers: subscribers[job_id] = []
         subscribers[job_id].append(q)
+        
+        # Yield current progress immediately
+        yield f"data: {json.dumps({'percent': job.get('percent', 0), 'output': job.get('output')})}\n\n"
+        
         try:
             while True:
                 msg = await q.get()
