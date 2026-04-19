@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "reencode_audio_instant": False,
     "enable_ytdlp_potoken": False,
     "show_advanced_livestream": False,
+    "auto_proxy_enabled": False,
     "high_precision_cutter": False,
     "proxy_enabled": False,
     "proxy_type": "socks5",

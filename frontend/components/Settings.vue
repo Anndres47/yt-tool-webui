@@ -53,6 +53,23 @@
 
       <div class="field" style="margin-top:14px">
         <label
+          :class="['toggle-row', { checked: cfg.auto_proxy_enabled }]"
+          @click="cfg.auto_proxy_enabled = !cfg.auto_proxy_enabled"
+        >
+          <div class="toggle-box">
+            <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+              <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          Enable Auto Proxy Pool (Background managed)
+        </label>
+        <div style="font-size:10px; color:var(--muted); margin-top:4px; padding-left:24px;">
+          Automatically find and rotate healthy proxies when the system is idle.
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:14px" v-if="!cfg.auto_proxy_enabled">
+        <label
           :class="['toggle-row', { checked: cfg.proxy_enabled }]"
           @click="cfg.proxy_enabled = !cfg.proxy_enabled"
         >
@@ -61,11 +78,11 @@
               <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </div>
-          Enable Proxy
+          Enable Manual Proxy
         </label>
       </div>
 
-      <template v-if="cfg.proxy_enabled">
+      <template v-if="cfg.proxy_enabled && !cfg.auto_proxy_enabled">
         <div class="field" style="margin-top:14px">
           <label class="field-label">Type</label>
           <select v-model="cfg.proxy_type">

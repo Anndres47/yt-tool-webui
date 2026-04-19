@@ -22,6 +22,33 @@ from fastapi.staticfiles import StaticFiles
 from config import get_config, save_config
 from logger import log_command, redact_cmd
 from jobs import JobManager
+from proxies import ProxyManager
+from proxies import ProxyManager
+
+# Initialize managers
+job_manager = JobManager(get_config()["data_path"])
+proxy_manager = ProxyManager(get_config()["data_path"])
+proxy_stop_event = asyncio.Event()
+
+async def proxy_worker():
+    """Background task that scavenges for healthy proxies every hour if idle."""
+    while True:
+        # Check every 10 mins if we need to start a scavenge
+        await asyncio.sleep(600) 
+        
+        cfg = get_config()
+        if not cfg.get("auto_proxy_enabled"):
+            continue
+
+        # Check for 1h cycle since last success
+        if time.time() - proxy_manager.last_full_refresh < 3600:
+            continue
+
+        # Strictly only if idle
+        running_jobs = [j for j in job_manager.get_all_jobs().values() if j.get("status") == "running"]
+        if len(running_jobs) == 0:
+            proxy_stop_event.clear()
+            await proxy_manager.scavenge(proxy_stop_event)
 
 
 def build_proxy_url(cfg: dict) -> Optional[str]:
@@ -465,6 +492,7 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(check_pot_connectivity())
     asyncio.create_task(checkpoint_saver())
     asyncio.create_task(cleanup_stale_temp_dirs())
+    asyncio.create_task(proxy_worker())
     to_recover = job_manager.cleanup_on_startup()
     if to_recover:
         asyncio.create_task(auto_recover_livestreams(to_recover))
@@ -481,8 +509,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize job manager
+# Initialize managers
 job_manager = JobManager(get_config()["data_path"])
+proxy_manager = ProxyManager(get_config()["data_path"])
+proxy_stop_event = asyncio.Event()
 job_manager.cleanup_on_startup()
 
 
@@ -610,20 +640,52 @@ async def api_library_stream(folder: str, filename: str, request: Request):
 async def api_download(url: str = Form(...), mode: str = Form(...), quality: str = Form("best"), reencode_audio: str = Form("false"), live_from: Optional[str] = Form(None), capture_duration: Optional[str] = Form(None)):
     cfg = get_config()
     job_id = str(uuid.uuid4())
-    potoken, visitor_id = "", ""
-    proxy_url = build_proxy_url(cfg)
-    
-    # Logic: Livestream MUST have a token. Video/Audio can skip if configured.
-    should_fetch_token = mode == "livestream" or cfg.get("enable_ytdlp_potoken")
-    
-    if should_fetch_token:
-        if len(cfg.get("potoken", "").strip()) < 20:
-            potoken, visitor_id = await get_auto_potoken()
-        else:
-            potoken = cfg["potoken"].strip()
 
-    # Get title AFTER fetching token so we can use it
-    title = await get_video_title(url, potoken, visitor_id, proxy_url)
+    # 1. Stop background scavenger
+    proxy_stop_event.set()
+
+    # 2. Resolve all potential proxies
+    manual_proxy = build_proxy_url(cfg)
+    potential_proxies = [manual_proxy] if manual_proxy else []
+    if cfg.get("auto_proxy_enabled"):
+        potential_proxies.extend(proxy_manager.get_valid_proxies())
+
+    # Fallback to direct if no proxies selected/available
+    if not potential_proxies:
+        potential_proxies = [None]
+
+    # 3. Rotate through proxies (up to 5) to find one that works
+    working_proxy = None
+    title = "Unknown Title"
+    potoken, visitor_id = "", ""
+
+    for attempt, current_proxy in enumerate(potential_proxies[:5]):
+        try:
+            print(f"[job:{job_id[:8]}] Attempt {attempt+1}: Testing proxy {redact_cmd([current_proxy]) if current_proxy else 'DIRECT'}", flush=True)
+
+            # Reset tokens for each new proxy attempt
+            potoken, visitor_id = "", ""
+            should_fetch_token = mode == "livestream" or cfg.get("enable_ytdlp_potoken")
+            if should_fetch_token:
+                if len(cfg.get("potoken", "").strip()) < 20:
+                    potoken, visitor_id = await get_auto_potoken()
+                else:
+                    potoken = cfg["potoken"].strip()
+
+            title = await get_video_title(url, potoken, visitor_id, current_proxy)
+
+            if title and title != "Unknown Title":
+                working_proxy = current_proxy
+                print(f"[job:{job_id[:8]}] Found working connection with proxy: {working_proxy or 'DIRECT'}", flush=True)
+                break
+            else:
+                # If title fetch failed, flag the proxy and try next
+                if current_proxy and cfg.get("auto_proxy_enabled"):
+                    proxy_manager.flag_proxy(current_proxy)
+                print(f"[job:{job_id[:8]}] Proxy failed or flagged. Retrying...", flush=True)
+
+        except Exception as e:
+            print(f"[job:{job_id[:8]}] Proxy attempt error: {e}", flush=True)
 
     if len([j for j in job_manager.get_all_jobs().values() if j.get("type") == "download" and j.get("status") == "running"]) >= 5:
         raise HTTPException(status_code=429, detail="Limit reached")
@@ -637,7 +699,7 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
         if potoken: cmd += ["--potoken", potoken]
         if visitor_id: cmd += ["--visitor-data", visitor_id]
-        if proxy_url: cmd += ["--proxy", proxy_url]
+        if working_proxy: cmd += ["--proxy", working_proxy]
         if live_from: cmd += ["--live-from", live_from]
         if capture_duration: cmd += ["--capture-duration", capture_duration]
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
@@ -647,24 +709,26 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         fmt = "bestaudio/best" if mode == "audio" else QUALITY_MAP.get(quality, QUALITY_MAP["best"])
         # Use a per-job cache directory to allow session persistence (fixing 403s) without clashing
         cmd = ["yt-dlp", "--newline", "--cache-dir", f"{job_temp_dir}/cache", "--js-runtimes", "node", "--remote-components", "ejs:github", "-f", fmt, "--paths", f"temp:{job_temp_dir}", "--paths", f"home:{cfg['output_path']}", "-o", "%(title)s.%(ext)s"]
-        
+
         if mode == "audio":
             cmd += ["-x"]
             if reencode_audio == "true": 
                 cmd += ["--audio-format", "mp3", "--postprocessor-args", "ffmpeg:-b:a 320k"]
-        
+
         if cfg.get("cookies_path"): cmd += ["--cookies", cfg["cookies_path"]]
-        
+
+        # Inject tokens if available (governed by settings toggle)
         if potoken:
             y_args = [f"po_token=web+{potoken}"]
             if visitor_id: y_args.append(f"visitor_data={visitor_id}")
             cmd += ["--extractor-args", f"youtube:{';'.join(y_args)}"]
-        
-        if proxy_url:
-            cmd += ["--proxy", proxy_url]
-            
+
+        if working_proxy:
+            cmd += ["--proxy", working_proxy]
+
         if cfg.get("ytdlp_args"): cmd.extend(shlex.split(cfg["ytdlp_args"]))
         cmd.append(url)
+
     print(f"[job:{job_id[:8]}] EXECUTING: {redact_cmd(cmd)}", flush=True)
     log_command(job_id, cmd)
     process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
