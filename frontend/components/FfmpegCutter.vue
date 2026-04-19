@@ -436,6 +436,14 @@ function listenToCut(jobId) {
   eventSource = new EventSource(`/api/ffmpeg/progress/${jobId}`)
   eventSource.onmessage = (e) => {
     const data = JSON.parse(e.data)
+
+    // Clear any temporary connection warnings
+    if (cutMsg.value?.text === 'Connection lost. Reconnecting...') {
+      cutMsg.value = null
+    }
+
+    if (data.ping) return
+
     if (data.error) {
       cutMsg.value = { type: 'error', text: data.error }
       cutting.value = false
@@ -456,10 +464,8 @@ function listenToCut(jobId) {
   }
   eventSource.onerror = () => {
     if (cutting.value) {
-      cutMsg.value = { type: 'error', text: 'Connection to server lost.' }
-      cutting.value = false
-      eventSource?.close()
-      eventSource = null
+      // Don't close the connection, allow native EventSource auto-reconnect
+      cutMsg.value = { type: 'error', text: 'Connection lost. Reconnecting...' }
     }
   }
 }
