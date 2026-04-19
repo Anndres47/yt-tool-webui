@@ -643,16 +643,18 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
     # 1. Stop background scavenger
     proxy_stop_event.set()
 
-    # 2. Resolve all potential proxies
-    manual_proxy = build_proxy_url(cfg)
-    potential_proxies = [manual_proxy] if manual_proxy else []
-    if cfg.get("auto_proxy_enabled"):
-        potential_proxies.extend(proxy_manager.get_valid_proxies())
+    # 2. Resolve potential proxies (Skip entirely for livestreams)
+    if mode == "livestream":
+        potential_proxies = [None]
+    else:
+        manual_proxy = build_proxy_url(cfg)
+        potential_proxies = [manual_proxy] if manual_proxy else []
+        if cfg.get("auto_proxy_enabled"):
+            potential_proxies.extend(proxy_manager.get_valid_proxies())
 
     # Fallback to direct if no proxies selected/available
     if not potential_proxies:
         potential_proxies = [None]
-
     # 3. Rotate through proxies (up to 5) to find one that works
     working_proxy = None
     title = "Unknown Title"
