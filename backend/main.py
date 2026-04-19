@@ -263,42 +263,44 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                     print(f"[job:{job_id[:8]}] {clean_line}", flush=True)
                     
                     if mode == "livestream":
-                        # Improved regex: specifically look for Video Fragments as the primary progress indicator
-                        # Also handles the generic "Segments: X" format
-                        if "Video Fragments" in clean_line or "Segments" in clean_line:
+                        v_match = re.search(r"Video Fragments:\s*(\d+)", clean_line, re.IGNORECASE)
+                        a_match = re.search(r"Audio Fragments:\s*(\d+)", clean_line, re.IGNORECASE)
+                        
+                        if v_match or a_match:
                             has_progressed = True
-                            # Find all fragment/segment numbers in the line
-                            all_nums = re.findall(r"(?:Fragments|Segments|frags):\s*(\d+)", clean_line, re.IGNORECASE)
-                            if all_nums:
-                                # If both V and A are present, sum them for "Total chunks"
-                                # but if just one is present, use that.
-                                segments = sum(int(n) for n in all_nums)
-                                is_live = any(word in clean_line.lower() for word in ["live", "up to date", "current"])
-                                job_manager.update_job(job_id, {"segments": segments, "is_live": is_live}, save_to_disk=False)
-                                latest_event_data = {"live": is_live, "segments": segments, "mode": "livestream"}
-                                
-                                # Always broadcast livestream updates immediately to keep UI active
-                                if job_id in subscribers:
-                                    msg = f"data: {json.dumps(latest_event_data)}\n\n"
-                                    for q in subscribers[job_id]:
-                                        await q.put(msg)
-                                    last_broadcast = time.time()
-                                    latest_event_data = None # Prevent double-broadcast below
+                            v_frags = int(v_match.group(1)) if v_match else 0
+                            a_frags = int(a_match.group(1)) if a_match else 0
+                            is_live = any(word in clean_line.lower() for word in ["live", "up to date", "current"])
+                            
+                            job_manager.update_job(job_id, {"v_frags": v_frags, "a_frags": a_frags, "is_live": is_live}, save_to_disk=False)
+                            latest_event_data = {"mode": "livestream", "v_frags": v_frags, "a_frags": a_frags, "live": is_live}
+                        
+                        elif any(word in clean_line.lower() for word in ["download complete", "muxing", "merging"]):
+                            latest_event_data = {"mode": "livestream", "status": "muxing"}
+                        
+                        if latest_event_data and job_id in subscribers:
+                            msg = f"data: {json.dumps(latest_event_data)}\n\n"
+                            for q in subscribers[job_id]: await q.put(msg)
+                            last_broadcast = time.time()
+                            latest_event_data = None
+
                     elif mode == "ffmpeg":
-                        # FFmpeg progress: frame= 123 ... time=00:00:05.12 ...
+                        # If this is a livestream recovery job, tell the UI we are muxing
+                        job = job_manager.get_job(job_id)
+                        is_recovery = job and job.get("type") == "finalize"
+                        
                         time_match = re.search(r"time=(\d+:\d+:\d+\.\d+)", clean_line)
                         if time_match:
                             has_progressed = True
                             cur_time_str = time_match.group(1)
-                            # Convert HH:MM:SS.ms to seconds
                             h, m, s = cur_time_str.split(':')
                             cur_sec = int(h)*3600 + int(m)*60 + float(s)
                             
-                            duration = job_manager.get_job(job_id).get("duration_s", 0)
-                            if duration > 0:
-                                percent = min(100.0, round((cur_sec / duration) * 100, 1))
-                                job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
-                                latest_event_data = {"percent": percent}
+                            duration = job.get("duration_s", 0)
+                            percent = min(100.0, round((cur_sec / duration) * 100, 1)) if duration > 0 else 0
+                            job_manager.update_job(job_id, {"percent": percent}, save_to_disk=False)
+                            latest_event_data = {"percent": percent}
+                            if is_recovery: latest_event_data["status"] = "muxing"
                     else:
                         # Robust regex: handles varying spaces, tildes, and missing ETA/Speed
                         dl_match = re.search(r"\[download\]\s+([\d.]+)%\s+of\s+([~\d.]+\S+)(?:\s+at\s+([~\d.]+\S+))?(?:\s+ETA\s+([~\d:]+))?", clean_line)

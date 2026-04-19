@@ -196,11 +196,22 @@
         <div class="task-progress-area">
           <div class="progress-header">
             <div>
-              <div v-if="task.mode === 'livestream' || task.isLive" class="live-badge">
-                <div class="live-dot"></div>
-                <span v-if="task.isLive">Live — {{ task.segments }} segments</span>
-                <span v-else>Catching up — {{ task.segments }} segments</span>
-              </div>
+              <!-- Livestream Status Badges -->
+              <template v-if="task.mode === 'livestream' || task.isLive">
+                <div v-if="task.liveStatus === 'muxing' || task.status === 'finishing'" class="live-badge live-muxing">
+                  <div class="live-dot"></div>
+                  <span>Muxing fragments...</span>
+                </div>
+                <div v-else-if="task.vFrags < task.aFrags && task.aFrags > 0" class="live-badge live-catching">
+                  <div class="live-dot"></div>
+                  <span>Catching up — V: {{ task.vFrags }} / A: {{ task.aFrags }}</span>
+                </div>
+                <div v-else class="live-badge live-recording">
+                  <div class="live-dot"></div>
+                  <span>Live recording — {{ task.vFrags }} segments</span>
+                </div>
+              </template>
+              
               <div v-else class="progress-pct">{{ task.percent.toFixed(1) }}<span style="font-size:11px;opacity:0.6">%</span></div>
             </div>
             <div class="progress-meta">
@@ -211,8 +222,8 @@
           <div class="progress-track">
             <div
               class="progress-fill"
-              :class="{ indeterminate: task.mode === 'livestream' && !task.done }"
-              :style="{ width: (task.mode === 'livestream' && !task.done) ? '' : task.percent + '%' }"
+              :class="{ indeterminate: (task.mode === 'livestream' || task.isLive) && !task.done }"
+              :style="((task.mode === 'livestream' || task.isLive) && !task.done) ? {} : { width: task.percent + '%' }"
             ></div>
           </div>
         </div>
@@ -309,7 +320,11 @@ function addTaskFromJob(id, job) {
     url: job.url || 'Unknown source',
     title: job.title || '',
     mode: job.mode || 'video',
+    status: job.status || 'running',
     percent: job.percent || 0,
+    vFrags: job.v_frags || 0,
+    aFrags: job.a_frags || 0,
+    liveStatus: job.type === 'finalize' ? 'muxing' : '',
     speed: '',
     eta: '',
     isLive: !!job.is_live,
@@ -384,7 +399,11 @@ const startDownload = async () => {
       url: taskUrl,
       title: jobTitle,
       mode: taskMode,
+      status: 'running',
       percent: 0,
+      vFrags: 0,
+      aFrags: 0,
+      liveStatus: '',
       speed: '',
       eta: '',
       isLive: false,
@@ -455,7 +474,9 @@ function listenToJob(task) {
     }
     if (data.mode === 'livestream') {
       task.isLive = !!data.live
-      task.segments = data.segments || 0
+      if (data.v_frags !== undefined) task.vFrags = data.v_frags
+      if (data.a_frags !== undefined) task.aFrags = data.a_frags
+      if (data.status) task.liveStatus = data.status
       return
     }
     if (data.percent !== undefined) {
@@ -498,6 +519,7 @@ function removeTask(id) {
     activeTasks.value.splice(idx, 1)
   }
 }
+
 </script>
 
 <style scoped>
@@ -557,6 +579,34 @@ function removeTask(id) {
   font-size: 10px;
   color: var(--muted);
 }
+
+/* Livestream Status Colors */
+.live-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.live-badge.live-catching { color: var(--red); }
+.live-badge.live-recording { color: var(--green); }
+.live-badge.live-muxing { color: var(--accent); }
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+}
+.live-recording .live-dot {
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
 .task-cancel-dialog {
   margin: 10px 0;
   padding: 6px 12px;
