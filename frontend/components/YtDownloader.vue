@@ -377,11 +377,12 @@ const startDownload = async () => {
 
     const res = await axios.post('/api/download', form)
     const jobId = res.data.job_id
+    const jobTitle = res.data.title || ''
     
     const task = {
       id: jobId,
       url: taskUrl,
-      title: '', // Will be updated via the jobs API on next refresh
+      title: jobTitle,
       mode: taskMode,
       percent: 0,
       speed: '',
