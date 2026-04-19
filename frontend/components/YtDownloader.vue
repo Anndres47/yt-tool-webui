@@ -397,6 +397,14 @@ const startDownload = async () => {
     
     activeTasks.value.push(task)
     url.value = '' // Clear for next download
+    // Reset advanced options
+    enableLiveFrom.value = false
+    liveFromHours.value = 0
+    liveFromMins.value = 0
+    enableCaptureDuration.value = false
+    captureDurationHours.value = 0
+    captureDurationMins.value = 30
+    
     listenToJob(task)
   } catch (err) {
     // Show error in a temporary msg if submission fails
