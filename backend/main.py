@@ -7,11 +7,12 @@ import shutil
 import signal
 import urllib.request
 import time
+import uuid
 from contextlib import asynccontextmanager
 from urllib.parse import unquote
-import uuid
 from pathlib import Path
 from typing import Optional
+from html import unescape
 
 import aiofiles
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
@@ -23,12 +24,26 @@ from config import get_config, save_config
 from logger import log_command, redact_cmd
 from jobs import JobManager
 from proxies import ProxyManager
-from proxies import ProxyManager
 
-# Initialize managers
+# Initialize managers once
 job_manager = JobManager(get_config()["data_path"])
 proxy_manager = ProxyManager(get_config()["data_path"])
 proxy_stop_event = asyncio.Event()
+
+# Global Constants
+ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+QUALITY_MAP = {
+    "best": "bestvideo+bestaudio/best",
+    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
+    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
+    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
+}
+
+# Global state for broadcasting progress
+# job_id -> list of asyncio.Queue
+subscribers: dict[str, list[asyncio.Queue]] = {}
+
 
 async def proxy_worker():
     """Background task that scavenges for healthy proxies every hour if idle."""
@@ -508,23 +523,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize managers
-job_manager = JobManager(get_config()["data_path"])
-proxy_manager = ProxyManager(get_config()["data_path"])
-proxy_stop_event = asyncio.Event()
-job_manager.cleanup_on_startup()
-
-
-QUALITY_MAP = {
-    "best": "bestvideo+bestaudio/best",
-    "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
-    "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-    "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-    "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-}
-
-ONE_GB = 1 * 1024 * 1024 * 1024
 
 
 @app.get("/api/settings")
