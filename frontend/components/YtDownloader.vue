@@ -227,7 +227,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onActivated, watch } from 'vue'
 import axios from 'axios'
 
 const modes = [
@@ -262,13 +262,34 @@ const enableCaptureDuration = ref(false)
 const captureDurationHours = ref(0)
 const captureDurationMins = ref(30)
 
-onMounted(async () => {
+// Constraints: Live From (Max 48h 0m)
+watch([liveFromHours, liveFromMins], ([h, m]) => {
+  if (h >= 48 && m > 0) {
+    liveFromMins.value = 0
+  }
+})
+
+// Constraints: Capture Duration (Min 0h 30m, Max 48h 0m)
+watch([captureDurationHours, captureDurationMins], ([h, m]) => {
+  if (h === 0 && m < 30) {
+    captureDurationMins.value = 30
+  }
+  if (h >= 48 && m > 0) {
+    captureDurationMins.value = 0
+  }
+})
+
+async function refreshSettings() {
   try {
-    const [jobsRes, settingsRes] = await Promise.all([
-      axios.get('/api/jobs'),
-      axios.get('/api/settings')
-    ])
-    settings.value = settingsRes.data
+    const res = await axios.get('/api/settings')
+    settings.value = res.data
+  } catch (_) {}
+}
+
+onMounted(async () => {
+  await refreshSettings()
+  try {
+    const jobsRes = await axios.get('/api/jobs')
     const jobs = jobsRes.data
     for (const [id, job] of Object.entries(jobs)) {
       if (job.type === 'download' && job.status === 'running') {
@@ -276,6 +297,10 @@ onMounted(async () => {
       }
     }
   } catch (_) {}
+})
+
+onActivated(async () => {
+  await refreshSettings()
 })
 
 function addTaskFromJob(id, job) {
