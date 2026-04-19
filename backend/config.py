@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
     "enable_ytdlp_potoken": False,
     "show_advanced_livestream": False,
     "auto_proxy_enabled": False,
+    "proxy_pool_size": 15,
     "high_precision_cutter": False,
     "proxy_enabled": False,
     "proxy_type": "socks5",

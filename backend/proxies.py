@@ -73,8 +73,12 @@ class ProxyManager:
         return None
 
     async def scavenge(self, stop_event: asyncio.Event):
-        """Background worker to find 15 healthy proxies. Can be interrupted."""
-        print("[ProxyManager] Starting background scavenger...", flush=True)
+        """Background worker to find healthy proxies. Can be interrupted."""
+        from config import get_config
+        cfg = get_config()
+        target_count = max(5, int(cfg.get("proxy_pool_size", 15)))
+
+        print(f"[ProxyManager] Starting background scavenger (Target: {target_count})...", flush=True)
         
         # Download fresh list
         try:
@@ -87,7 +91,6 @@ class ProxyManager:
 
         random.shuffle(raw_list)
         new_healthy = []
-        target_count = 15
         
         # Keep existing healthy ones if they haven't expired
         self.pool = [p for p in self.pool if time.time() - p["added_at"] < 48 * 3600]
