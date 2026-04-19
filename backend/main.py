@@ -472,6 +472,7 @@ async def auto_recover_livestreams(job_ids: list[str]):
             job_manager.update_job(jid, {"status": "running", "type": "finalize", "pid": process.pid}, save_to_disk=True)
             job_manager.processes[jid] = process
             asyncio.create_task(watch_job(jid, process))
+            asyncio.create_task(broadcast_output(jid, process, "ffmpeg"))
 
         except Exception as e:
             print(f"\033[91m[System] Recovery failed for {jid[:8]}: {e}\033[0m", flush=True)
