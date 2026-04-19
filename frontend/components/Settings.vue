@@ -187,6 +187,20 @@
 
         <div class="field" style="margin-top:14px">
           <label
+            :class="['toggle-row', { checked: cfg.show_advanced_livestream }]"
+            @click="cfg.show_advanced_livestream = !cfg.show_advanced_livestream"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Show Advanced Livestream Options
+          </label>
+        </div>
+
+        <div class="field" style="margin-top:14px">
+          <label
             :class="['toggle-row', { checked: cfg.high_precision_cutter }]"
             @click="cfg.high_precision_cutter = !cfg.high_precision_cutter"
           >
@@ -251,6 +265,7 @@ const cfg = ref({
   audio_format: 'mp3',
   reencode_audio_instant: false,
   enable_ytdlp_potoken: false,
+  show_advanced_livestream: false,
   high_precision_cutter: false,
   proxy_enabled: false,
   proxy_type: 'socks5',

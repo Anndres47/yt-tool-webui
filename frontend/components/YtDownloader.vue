@@ -59,6 +59,69 @@
           @keyup.enter="startDownload"
         />
       </div>
+
+      <!-- Advanced Livestream Options -->
+      <div v-if="mode === 'livestream' && settings.show_advanced_livestream" style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px;">
+        <div style="font-size:12px; font-weight:600; margin-bottom: 8px;">Advanced Options</div>
+        
+        <div class="field">
+          <label
+            :class="['toggle-row', { checked: enableLiveFrom }]"
+            @click="!(submitting || activeTasks.length >= 5) && (enableLiveFrom = !enableLiveFrom)"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Live From (Start from a time in the past)
+          </label>
+          <div v-if="enableLiveFrom" style="margin-top: 8px; padding-left: 24px;">
+            <div style="display: flex; gap: 16px;">
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Hours Back ({{ liveFromHours }})</label>
+                <input type="range" v-model.number="liveFromHours" min="0" max="48" step="1" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Minutes Back ({{ liveFromMins }})</label>
+                <input type="range" v-model.number="liveFromMins" min="0" max="55" step="5" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+            </div>
+            <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+              {{ liveFromHours === 0 && liveFromMins === 0 ? 'Starts from NOW' : `Starts ${liveFromHours}h ${liveFromMins}m before NOW` }}
+            </div>
+          </div>
+        </div>
+
+        <div class="field" style="margin-top: 14px;">
+          <label
+            :class="['toggle-row', { checked: enableCaptureDuration }]"
+            @click="!(submitting || activeTasks.length >= 5) && (enableCaptureDuration = !enableCaptureDuration)"
+          >
+            <div class="toggle-box">
+              <svg class="toggle-check" viewBox="0 0 8 8" fill="none">
+                <path d="M1 4l2 2 4-4" stroke="#0a0a0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            Capture Duration (Stop recording after X time)
+          </label>
+          <div v-if="enableCaptureDuration" style="margin-top: 8px; padding-left: 24px;">
+            <div style="display: flex; gap: 16px;">
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Hours ({{ captureDurationHours }})</label>
+                <input type="range" v-model.number="captureDurationHours" min="0" max="48" step="1" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+              <div style="flex: 1;">
+                <label style="font-size:10px; color:var(--muted)">Minutes ({{ captureDurationMins }})</label>
+                <input type="range" v-model.number="captureDurationMins" min="0" max="55" step="5" :disabled="submitting || activeTasks.length >= 5" />
+              </div>
+            </div>
+            <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+              Records for {{ captureDurationHours }}h {{ captureDurationMins }}m
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Actions & Limit Disclaimer -->
@@ -189,10 +252,23 @@ const reencodeAudio = ref(false)
 const submitting = ref(false)
 const activeTasks = ref([])
 
+const settings = ref({ show_advanced_livestream: false })
+
+const enableLiveFrom = ref(false)
+const liveFromHours = ref(0)
+const liveFromMins = ref(0)
+
+const enableCaptureDuration = ref(false)
+const captureDurationHours = ref(0)
+const captureDurationMins = ref(30)
+
 onMounted(async () => {
   try {
-    // Load existing running jobs
-    const jobsRes = await axios.get('/api/jobs')
+    const [jobsRes, settingsRes] = await Promise.all([
+      axios.get('/api/jobs'),
+      axios.get('/api/settings')
+    ])
+    settings.value = settingsRes.data
     const jobs = jobsRes.data
     for (const [id, job] of Object.entries(jobs)) {
       if (job.type === 'download' && job.status === 'running') {
@@ -257,6 +333,23 @@ const startDownload = async () => {
     form.append('quality', quality.value)
     form.append('reencode_audio', reencodeAudio.value ? 'true' : 'false')
 
+    if (taskMode === 'livestream') {
+      if (enableLiveFrom.value) {
+        if (liveFromHours.value === 0 && liveFromMins.value === 0) {
+          form.append('live_from', 'now')
+        } else {
+          const h = liveFromHours.value.toString().padStart(2, '0')
+          const m = liveFromMins.value.toString().padStart(2, '0')
+          form.append('live_from', `-${h}:${m}:00`)
+        }
+      }
+      if (enableCaptureDuration.value) {
+        const h = captureDurationHours.value.toString().padStart(2, '0')
+        const m = captureDurationMins.value.toString().padStart(2, '0')
+        form.append('capture_duration', `${h}:${m}:00`)
+      }
+    }
+
     const res = await axios.post('/api/download', form)
     const jobId = res.data.job_id
     
@@ -296,6 +389,13 @@ function listenToJob(task) {
 
   es.onmessage = (e) => {
     const data = JSON.parse(e.data)
+    
+    // Clear any temporary connection warnings
+    if (task.msg?.text === 'Connection lost. Reconnecting...') {
+      task.msg = null
+    }
+
+    if (data.ping) return
 
     if (data.error) {
       task.msg = { type: 'error', text: data.error }
@@ -333,10 +433,8 @@ function listenToJob(task) {
 
   es.onerror = () => {
     if (!task.done && !task.msg) {
-      task.msg = { type: 'error', text: 'Connection lost. Refresh to reconnect.' }
-      cleanupTask(task)
-      // WE NO LONGER removeTask here. This prevents the card from disappearing
-      // while the background process is actually still running.
+      // Don't close the connection, allow native EventSource auto-reconnect
+      task.msg = { type: 'error', text: 'Connection lost. Reconnecting...' }
     }
   }
 }

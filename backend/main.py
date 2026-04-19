@@ -271,19 +271,25 @@ async def broadcast_output(job_id: str, process: asyncio.subprocess.Process, mod
                             }
 
                 # Send the most recent progress update from this chunk
+                now = time.time()
                 if latest_event_data and job_id in subscribers:
-                    now = time.time()
                     if now - last_broadcast > 0.1 or mode == "livestream":
                         msg = f"data: {json.dumps(latest_event_data)}\n\n"
                         for q in subscribers[job_id]:
                             await q.put(msg)
+                        last_broadcast = now
+                elif job_id in subscribers:
+                    if now - last_broadcast > 10:
+                        for q in subscribers[job_id]:
+                            await q.put('data: {"ping": true}\n\n')
                         last_broadcast = now
 
             except asyncio.TimeoutError:
                 # 1. Heartbeat: Keep UI connection alive regardless of progress
                 if job_id in subscribers:
                     for q in subscribers[job_id]:
-                        await q.put(": ping\n\n")
+                        await q.put('data: {"ping": true}\n\n')
+                last_broadcast = time.time()
 
                 # 2. Safety Shield: If we've seen progress, don't time out (livestreams/merges)
                 if has_progressed:
@@ -601,7 +607,7 @@ async def api_library_stream(folder: str, filename: str, request: Request):
 
 
 @app.post("/api/download")
-async def api_download(url: str = Form(...), mode: str = Form(...), quality: str = Form("best"), reencode_audio: str = Form("false")):
+async def api_download(url: str = Form(...), mode: str = Form(...), quality: str = Form("best"), reencode_audio: str = Form("false"), live_from: Optional[str] = Form(None), capture_duration: Optional[str] = Form(None)):
     cfg = get_config()
     job_id = str(uuid.uuid4())
     potoken, visitor_id = "", ""
@@ -632,6 +638,8 @@ async def api_download(url: str = Form(...), mode: str = Form(...), quality: str
         if potoken: cmd += ["--potoken", potoken]
         if visitor_id: cmd += ["--visitor-data", visitor_id]
         if proxy_url: cmd += ["--proxy", proxy_url]
+        if live_from: cmd += ["--live-from", live_from]
+        if capture_duration: cmd += ["--capture-duration", capture_duration]
         if cfg.get("ytarchive_args"): cmd.extend(shlex.split(cfg["ytarchive_args"]))
         cmd += [url, quality]
     else:
@@ -687,6 +695,12 @@ async def api_download_progress(job_id: str):
         q = asyncio.Queue()
         if job_id not in subscribers: subscribers[job_id] = []
         subscribers[job_id].append(q)
+        
+        # Yield current progress immediately to prevent UI from waiting for next update
+        initial_data = {"percent": job.get("percent", 0), "title": job.get("title")}
+        if job.get("mode") == "livestream":
+            initial_data.update({"segments": job.get("segments", 0), "live": job.get("is_live", False), "mode": "livestream"})
+        yield f"data: {json.dumps(initial_data)}\n\n"
         
         try:
             while True:
@@ -772,6 +786,10 @@ async def api_ffmpeg_progress(job_id: str):
         q = asyncio.Queue()
         if job_id not in subscribers: subscribers[job_id] = []
         subscribers[job_id].append(q)
+        
+        # Yield current progress immediately
+        yield f"data: {json.dumps({'percent': job.get('percent', 0), 'output': job.get('output')})}\n\n"
+        
         try:
             while True:
                 msg = await q.get()
